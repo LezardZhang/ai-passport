@@ -12,7 +12,7 @@ This is a proposal, not implemented functionality. The current request authorize
 
 - Input: `xigua_agent_solution_pack_v0.3_foundation.zip`, SHA-256 `7ea1f8e64bb9c11f455ad251030a8d65d2c8e7335d441002ce2a7b93492d8b81`. Reviewed scope, foundation, interaction, data, voice, routing, configuration, schemas, and acceptance materials.
 - Experience source: the previous project introduction/quota-tool conversation, ID `01a0e5b4-bdda-7250-b11b-a02d0d24b763`. Device findings below come from that conversation; this task did not operate the device.
-- Current branch `feature/quota-tool` contains uncommitted quota work. Preserve it. Reuse general lessons rather than including quota functionality by default. Future development should use a separate `feature/xigua-assistant` branch/workspace from an agreed baseline without resetting, overwriting, or silently relocating the existing changes.
+- Current branch `feature/xigua-childcare` contains the childcare implementation. Quota practice files remain separate and are not part of this application. Reuse general lessons without including quota functionality by default.
 - All five required Passport skills were verified available. No implementation or flashing workflow is initiated here.
 - References: [specifications](../hardware-design/specifications.md), [BSP pins](../../components/bsp/include/bsp_pins.h), [development constraints](../development/ai-guide.md), and [audio resource experience](../reference/phoenixzhc/network-audio-streaming-and-memory.md). Follow repository evidence precedence: the current pin header specifies an 80 MHz LCD clock while the overview says 40 MHz; do not change drivers from overview prose.
 

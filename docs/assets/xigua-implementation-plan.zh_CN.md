@@ -12,7 +12,7 @@
 
 - 输入包：`xigua_agent_solution_pack_v0.3_foundation.zip`；SHA-256：`7ea1f8e64bb9c11f455ad251030a8d65d2c8e7335d441002ce2a7b93492d8b81`。已审阅产品、基础能力、交互、数据、语音、路由、配置、Schema 和验收材料。
 - 经验会话：`https://github.com/FoloToy/ai-passport/tree/main 我买了这个产品，去了…`，会话 ID `01a0e5b4-bdda-7250-b11b-a02d0d24b763`。以下实机结论来自该会话记录，本轮没有重新操作设备。
-- 当前分支 `feature/quota-tool` 有未提交的额度工具改动；保持原样。额度查询默认不并入西瓜助手，仅提取通用经验。后续应用从确认的基线建立独立 `feature/xigua-assistant` 分支/工作区，不能覆盖、重置或隐式搬走现有修改。
+- 当前分支 `feature/xigua-childcare` 包含育儿助手实现。额度练习文件保持独立，不并入本应用；只提取其中的通用经验。
 - 五个必需 Passport 技能已核实可用。本轮只做方案，不启动开发或刷机流程。
 - 依据：[产品规格](../hardware-design/specifications.zh_CN.md)、[BSP 引脚](../../components/bsp/include/bsp_pins.h)、[AI 开发约束](../development/ai-guide.zh_CN.md)、[音频资源经验](../reference/phoenixzhc/network-audio-streaming-and-memory.zh_CN.md)。硬件冲突遵循仓库事实优先级，例如当前引脚头定义 LCD 时钟为 80 MHz，而概览仍写 40 MHz；不可据概览改驱动。
 
