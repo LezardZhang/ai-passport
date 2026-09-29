@@ -13,6 +13,7 @@ run_static_checks() {
     local test_dir
 
     python3 tools/check_repo.py
+    python3 tools/check_xigua_fonts.py
 
     actionlint_bin="${ACTIONLINT_BIN:-}"
     if [[ -z "${actionlint_bin}" ]]; then
@@ -24,6 +25,31 @@ run_static_checks() {
     "${actionlint_bin}" -color .github/workflows/*.yml
 
     test_dir="$(mktemp -d /tmp/ai-passport-host-tests.XXXXXX)"
+    for module in core input store wifi_policy calendar export sound audio_policy keyboard; do
+        "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/xigua \
+            "tests/test_xigua_${module}.c" "main/xigua/xigua_${module}.c" \
+            -o "${test_dir}/test_xigua_${module}"
+        "${test_dir}/test_xigua_${module}"
+    done
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/xigua -Itests/xigua_audio_stubs \
+        tests/test_xigua_audio_worker.c main/xigua/xigua_audio_policy.c main/xigua/xigua_sound.c \
+        -o "${test_dir}/test_xigua_audio_worker"
+    "${test_dir}/test_xigua_audio_worker"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/xigua \
+        -Itests/xigua_ui_stubs -Itests/xigua_audio_stubs \
+        tests/test_xigua_ui.c main/xigua/xigua_keyboard.c main/xigua/xigua_core.c \
+        -o "${test_dir}/test_xigua_ui"
+    "${test_dir}/test_xigua_ui"
+    local cjson_dir="tests/vendor/cjson"
+    for module in management ai_protocol; do
+        "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/xigua -I"${cjson_dir}" \
+            "tests/test_xigua_${module}.c" "main/xigua/xigua_${module}.c" \
+            main/xigua/xigua_config.c main/xigua/xigua_json.c "${cjson_dir}/cJSON.c" \
+            -o "${test_dir}/test_xigua_${module}"
+        "${test_dir}/test_xigua_${module}"
+    done
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_device.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_mimo.py
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_ui_pixel_math.c main/ui_pixel_math.c \
         -o "${test_dir}/test_ui_pixel_math"

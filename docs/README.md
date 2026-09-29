@@ -211,6 +211,11 @@ provide reference material. Choose the entry that matches your task.
 | [Chinese fonts](development/engineering/lvgl-chinese-fonts.md) | Glyph coverage, widget font selection, and blank-text troubleshooting |
 | [Wi-Fi provisioning](development/engineering/wifi-provisioning.md) | Bluetooth provisioning reference and companion mini program |
 | [Community projects and experience](reference/README.md) | Playbooks and reusable knowledge under `docs/reference/<username>/` |
+| [Xigua Assistant proposal](assets/xigua-implementation-plan.md) | Product scope, staged implementation, and acceptance |
+| [Xigua offline prototype](assets/xigua-m0-m1.md) | M0-M1 controls, data limits, layout, and hardware acceptance |
+| [Xigua connectivity increment](assets/xigua-m2.md) | USB configuration, Wi-Fi, time, statistics and record export |
+| [Xigua local sound increment](assets/xigua-m3.md) | Synthetic ambient sound, volume and timer-alert arbitration |
+| [Xigua MiMo configuration](assets/xigua-mimo.md) | Model roles, runtime credentials and host speech integration |
 | [Contributing](contribution/README.md) | Documentation, commits, and pull-request conventions |
 | [Brand assets](brand/README.md) | Product visual references and [brand language](brand/brand-and-product.md) |
 | [Fork guide](fork-guide.md) · [Changelog](CHANGELOG.md) | Downstream workflows and release history |

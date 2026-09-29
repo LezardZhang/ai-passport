@@ -91,7 +91,8 @@ class VendoredDocumentationTest(unittest.TestCase):
             with self.subTest(name=name):
                 errors = self.document_errors([self.document(name)])
                 self.assertEqual(len(errors), 2)
-                self.assertTrue(all(name in error for error in errors))
+                normalized_errors = [error.replace("\\", "/") for error in errors]
+                self.assertTrue(all(name in error for error in normalized_errors))
 
     def test_valid_first_party_pair_and_links_still_pass(self) -> None:
         files = [

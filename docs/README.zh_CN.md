@@ -205,6 +205,11 @@ LICENSE                  仓库许可证
 | [中文字体](development/engineering/lvgl-chinese-fonts.zh_CN.md) | 字形覆盖、控件字体选择，以及中文空白排查 |
 | [Wi-Fi 配网](development/engineering/wifi-provisioning.zh_CN.md) | 蓝牙配网实现参考与配套小程序 |
 | [社区作品与经验](reference/README.zh_CN.md) | `docs/reference/<username>/` 下的应用档案和可复用知识 |
+| [西瓜助手实施方案](assets/xigua-implementation-plan.zh_CN.md) | 产品范围、分阶段实现与验收 |
+| [西瓜离线原型](assets/xigua-m0-m1.zh_CN.md) | M0–M1 操作、数据限制、分区与真机验收 |
+| [西瓜联网增量](assets/xigua-m2.zh_CN.md) | USB 配置、Wi-Fi、时间与 AI 文本请求 |
+| [西瓜本地声音增量](assets/xigua-m3.zh_CN.md) | 合成环境声音、音量与计时提醒仲裁 |
+| [西瓜 MiMo 配置](assets/xigua-mimo.zh_CN.md) | 模型分工、运行时凭据与电脑端语音联调 |
 | [参与贡献](contribution/README.zh_CN.md) | 文档、提交与 Pull Request 约定 |
 | [品牌素材](brand/README.zh_CN.md) | 产品视觉参考与[品牌说明](brand/brand-and-product.zh_CN.md) |
 | [Fork 指南](fork-guide.zh_CN.md) · [更新记录](CHANGELOG.zh_CN.md) | 下游工作流与版本历史 |

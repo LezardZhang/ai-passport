@@ -12,6 +12,11 @@ Keep each asset in the matching subdirectory and document its destination, namin
 
 Store reusable font files and generated font sources in `fonts/`.
 
+The Xigua application uses [`fonts/xigua_font_16.c`](fonts/xigua_font_16.c), a
+16 px Noto Sans SC Regular subset covering 299 fixed UI/ASCII code points. Its
+reusable TTF, SIL OFL license, source metadata, conversion command and LVGL
+integration are documented in [Xigua UI Font](fonts/xigua-font.md).
+
 - Use descriptive names that include the family, weight, size, and format when relevant.
 - Document the source, license, character range, conversion command, and expected destination.
 - Check Flash and internal-RAM impact before adding a font; the ESP32-C3 has no PSRAM.
