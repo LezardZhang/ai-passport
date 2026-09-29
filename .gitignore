@@ -11,3 +11,7 @@ managed_components/
 /.agents/skills/passport-build
 /.agents/skills/passport-device-test
 /.agents/skills/passport-debug
+
+# Local quota/API credentials; never commit these files.
+*credentials*.json
+quota_config_local.h

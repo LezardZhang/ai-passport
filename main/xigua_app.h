@@ -1,0 +1,17 @@
+#pragma once
+
+#include "bsp_button.h"
+#include "esp_err.h"
+
+// Offline childcare application. Slow work and persistence run outside LVGL;
+// quota_app remains a separate practice application and is not part of this UI.
+void xigua_app_enter(void);
+void xigua_app_exit(void);
+esp_err_t xigua_app_start(void);
+esp_err_t xigua_app_stop(void);
+void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev);
+
+// Called by the future voice/network worker after the model returns JSON.
+// Command actions are applied to local records; reply_text/tts_text are surfaced
+// to the current assistant page without treating normal prose as a device command.
+esp_err_t xigua_app_ai_response(const char *json);
