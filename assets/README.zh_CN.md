@@ -11,7 +11,7 @@
 可复用的字库文件与生成的字库源码放在 `fonts/`。
 
 西瓜助手使用 [`fonts/xigua_font_16.c`](fonts/xigua_font_16.c)：16 px 的 Noto
-Sans SC Regular 子集，覆盖 299 个固定界面/ASCII 码点。可复用 TTF、SIL OFL
+Sans SC Regular 子集，覆盖 304 个固定界面/ASCII 码点。可复用 TTF、SIL OFL
 许可、来源信息、转换命令与 LVGL 集成方式见[西瓜界面字库](fonts/xigua-font.zh_CN.md)。
 
 - 命名要能反映字族、字重、字级与格式。

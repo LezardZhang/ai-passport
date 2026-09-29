@@ -13,10 +13,12 @@ static void test_layout_and_character_coverage(void)
 {
     xigua_keyboard_t keyboard;
     assert(xigua_keyboard_init(&keyboard, "", 33));
-    assert(XIGUA_KEYBOARD_KEY_COUNT == 25);
+    assert(XIGUA_KEYBOARD_KEY_COUNT == 35);
     assert(XIGUA_KEYBOARD_MODE_COUNT == 3);
     assert(strcmp(xigua_keyboard_label(&keyboard, 0), "a") == 0);
     assert(strcmp(xigua_keyboard_label(&keyboard, 19), "t") == 0);
+    assert(strcmp(xigua_keyboard_label(&keyboard, 20), "u") == 0);
+    assert(strcmp(xigua_keyboard_label(&keyboard, 26), "SPC") == 0);
     assert(strcmp(xigua_keyboard_label(&keyboard, XIGUA_KEYBOARD_KEY_LOWER), "小写") == 0);
     assert(strcmp(xigua_keyboard_label(&keyboard, XIGUA_KEYBOARD_KEY_UPPER), "大写") == 0);
     assert(strcmp(xigua_keyboard_label(&keyboard, XIGUA_KEYBOARD_KEY_SYMBOLS), "数符") == 0);
@@ -49,7 +51,7 @@ static void test_layout_and_character_coverage(void)
     assert(total == 97); /* Space is repeated in all three sets. */
     assert(seen[' ']);
     for (unsigned char c = 33; c <= 126; ++c) assert(seen[c]);
-    assert(!xigua_keyboard_key_enabled(&keyboard, 3)); /* Symbol page three has 3 chars. */
+    assert(!xigua_keyboard_key_enabled(&keyboard, 13)); /* Symbol page two has 13 chars. */
     assert(strcmp(xigua_keyboard_label(&keyboard, 14), "") == 0);
 }
 
@@ -57,17 +59,14 @@ static void test_movement_modes_and_paging(void)
 {
     xigua_keyboard_t keyboard;
     assert(xigua_keyboard_init(&keyboard, "", 65));
-    keyboard.selection = 24;
+    keyboard.selection = 34;
     xigua_keyboard_move(&keyboard, 1);
     assert(keyboard.selection == 0);
     xigua_keyboard_move(&keyboard, -1);
-    assert(keyboard.selection == 24);
-    assert(xigua_keyboard_page_count(&keyboard) == 2);
+    assert(keyboard.selection == 34);
+    assert(xigua_keyboard_page_count(&keyboard) == 1);
     xigua_keyboard_next_page(&keyboard);
-    assert(keyboard.mode == XIGUA_KEYBOARD_MODE_LOWER && keyboard.page == 1);
-    keyboard.selection = 6; /* Lowercase page two ends with SPC. */
-    xigua_keyboard_move(&keyboard, 1);
-    assert(keyboard.selection == XIGUA_KEYBOARD_KEY_DEL);
+    assert(keyboard.mode == XIGUA_KEYBOARD_MODE_LOWER && keyboard.page == 0);
     keyboard.selection = 0;
     xigua_keyboard_move(&keyboard, -1);
     assert(keyboard.selection == XIGUA_KEYBOARD_KEY_DONE);
@@ -79,22 +78,22 @@ static void test_movement_modes_and_paging(void)
     select_key(&keyboard, XIGUA_KEYBOARD_KEY_SYMBOLS);
     assert(xigua_keyboard_press(&keyboard) == XIGUA_KEYBOARD_MODE_CHANGED);
     assert(keyboard.mode == XIGUA_KEYBOARD_MODE_SYMBOLS);
-    assert(xigua_keyboard_page_count(&keyboard) == 3);
+    assert(xigua_keyboard_page_count(&keyboard) == 2);
     assert(strcmp(xigua_keyboard_label(&keyboard, 0), "0") == 0);
     xigua_keyboard_next_page(&keyboard);
     assert(keyboard.page == 1);
     xigua_keyboard_next_page(&keyboard);
-    xigua_keyboard_next_page(&keyboard);
     assert(keyboard.page == 0);
+    xigua_keyboard_next_page(&keyboard);
+    assert(keyboard.page == 1);
 }
 
 static void test_capacity_space_and_password_length(void)
 {
     xigua_keyboard_t keyboard;
     assert(xigua_keyboard_init(&keyboard, "", 33)); /* 32-byte SSID payload. */
+    keyboard.selection = 0;
     for (unsigned i = 0; i < 32; ++i) {
-        keyboard.page = 0;
-        keyboard.selection = (uint8_t)(i % 20);
         assert(xigua_keyboard_press(&keyboard) == XIGUA_KEYBOARD_EDITED);
     }
     assert(strlen(keyboard.text) == 32);
@@ -103,14 +102,14 @@ static void test_capacity_space_and_password_length(void)
     assert(strlen(keyboard.text) == 32);
     keyboard.selection = XIGUA_KEYBOARD_KEY_DEL;
     assert(xigua_keyboard_press(&keyboard) == XIGUA_KEYBOARD_EDITED);
-    keyboard.selection = 6; /* Lowercase page two ends with SPC. */
-    keyboard.page = 1;
+    keyboard.selection = 26; /* Lowercase page one ends with SPC. */
+    keyboard.page = 0;
     assert(xigua_keyboard_press(&keyboard) == XIGUA_KEYBOARD_EDITED);
     assert(keyboard.text[31] == ' ');
 
     assert(xigua_keyboard_init(&keyboard, "", 65)); /* 64-hex-character password. */
-    keyboard.page = 1;
-    keyboard.selection = 6;
+    keyboard.page = 0;
+    keyboard.selection = 26;
     for (unsigned i = 0; i < 64; ++i) {
         assert(xigua_keyboard_press(&keyboard) == XIGUA_KEYBOARD_EDITED);
     }

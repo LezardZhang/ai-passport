@@ -11,15 +11,20 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UI = ROOT / "main/xigua/xigua_ui.c"
+UI_SOURCES = (
+    ROOT / "main/xigua/xigua_ui.c",
+    ROOT / "main/xigua/xigua_keyboard.c",
+)
 FONT = ROOT / "assets/fonts/xigua_font_16.c"
 INVENTORY = ROOT / "assets/fonts/xigua_characters.txt"
 
 
 def characters():
-    strings = re.findall(r'"(?:[^"\\]|\\.)*"', UI.read_text(encoding="utf-8"))
-    # C literals used here have JSON-compatible escapes; no arbitrary user text.
-    text = "".join(json.loads(s) for s in strings)
+    text = ""
+    for source in UI_SOURCES:
+        strings = re.findall(r'"(?:[^"\\]|\\.)*"', source.read_text(encoding="utf-8"))
+        # C literals used here have JSON-compatible escapes; no arbitrary user text.
+        text += "".join(json.loads(s) for s in strings)
     return {ord(c) for c in text if ord(c) >= 32} | set(range(32, 127))
 
 

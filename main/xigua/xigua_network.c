@@ -82,6 +82,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     net_event_t event = {.generation = *generation};
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         event.kind = NET_STARTED;
+        ESP_LOGI(TAG, "WIFI_EVENT_STA_START");
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *disconnected = data;
         event.kind = NET_DISCONNECTED;
@@ -91,11 +92,14 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
             if (event.ssid_len <= sizeof(event.ssid))
                 memcpy(event.ssid, disconnected->ssid, event.ssid_len);
             else event.ssid_len = 0;
+            ESP_LOGW(TAG, "WIFI_EVENT_STA_DISCONNECTED reason=%d ssid_len=%u",
+                     event.reason, (unsigned)event.ssid_len);
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *got_ip = data;
         event.kind = NET_GOT_IP;
         event.netif = got_ip ? got_ip->esp_netif : NULL;
+        ESP_LOGI(TAG, "IP_EVENT_STA_GOT_IP");
     } else return;
     if (xQueueSend(s_events, &event, 0) != pdTRUE)
         atomic_store_explicit(&s_event_overflow, true, memory_order_relaxed);
@@ -125,6 +129,7 @@ static void stack_stop(wifi_stack_t *stack)
 static esp_err_t stack_start(wifi_stack_t *stack, uint32_t generation)
 {
     stack->generation = generation;
+    ESP_LOGI(TAG, "Wi-Fi STA stack starting generation=%lu", (unsigned long)generation);
     esp_netif_config_t netif_config = ESP_NETIF_DEFAULT_WIFI_STA();
     stack->netif = esp_netif_new(&netif_config);
     if (!stack->netif) return ESP_ERR_NO_MEM;
@@ -149,7 +154,10 @@ static esp_err_t stack_start(wifi_stack_t *stack, uint32_t generation)
     err = esp_wifi_set_mode(WIFI_MODE_STA);
     if (err != ESP_OK) return err;
     err = esp_wifi_start();
-    if (err == ESP_OK) stack->started = true;
+    if (err == ESP_OK) {
+        stack->started = true;
+        ESP_LOGI(TAG, "Wi-Fi STA stack started");
+    }
     return err;
 }
 
@@ -173,6 +181,8 @@ static void attempt(const xigua_config_t *config, xigua_wifi_policy_t *policy, u
     wifi_config_t wifi = {0};
     memcpy(wifi.sta.ssid, profile->ssid, strlen(profile->ssid));
     memcpy(wifi.sta.password, profile->password, strlen(profile->password));
+    ESP_LOGI(TAG, "connecting profile=%d ssid=\"%.*s\"", index,
+             (int)strnlen(profile->ssid, sizeof(profile->ssid)), profile->ssid);
     esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wifi);
     if (err == ESP_OK) err = esp_wifi_connect();
     if (err != ESP_OK) {
@@ -183,6 +193,7 @@ static void attempt(const xigua_config_t *config, xigua_wifi_policy_t *policy, u
     }
     xigua_wifi_policy_begin(policy, index);
     *started_ms = now;
+    ESP_LOGI(TAG, "profile=%d connection requested", index);
     status_set(true, false, index, 0, false);
 }
 
@@ -287,6 +298,8 @@ static void worker(void *context)
             if (event.generation != stack.generation || !stack.started) continue;
             if (event.kind == NET_STARTED) {
                 station_ready = true;
+                ESP_LOGI(TAG, "Wi-Fi station ready; profiles=%d",
+                         configured ? XG_WIFI_PROFILES : 0);
             } else if (event.kind == NET_DISCONNECTED) {
                 int index = policy.active;
                 if (index >= 0 && event.ssid_len &&
@@ -296,6 +309,9 @@ static void worker(void *context)
                 if (index >= 0) xigua_wifi_policy_failed(&policy, index,
                                                            classify(event.reason), now);
                 disconnect_pending = false;
+                ESP_LOGW(TAG, "profile=%d disconnected classified=%d reason=%d",
+                         index, index >= 0 ? (int)classify(event.reason) : -1,
+                         event.reason);
                 status_set(configured, false, -1, event.reason, false);
             } else if (event.kind == NET_GOT_IP && event.netif == stack.netif &&
                        policy.active >= 0 && !disconnect_pending) {
@@ -304,6 +320,7 @@ static void worker(void *context)
                 if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK ||
                     strncmp((const char *)ap.ssid, expected, sizeof(ap.ssid)) != 0) continue;
                 xigua_wifi_policy_connected(&policy, policy.active);
+                ESP_LOGI(TAG, "profile=%d connected and has IPv4", policy.active);
                 status_set(configured, true, policy.active, 0, false);
                 if (!sntp_ready) {
                     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");

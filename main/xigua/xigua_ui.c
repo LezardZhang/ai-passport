@@ -29,17 +29,22 @@ static bool s_keyboard_password, s_wifi_request_failed, s_keyboard_full;
 static lv_font_t s_chinese_font;
 /* Bounded widget allocation: polling and navigation never recreate a tree. */
 #define BOX_COUNT 10
-#define LABEL_COUNT 36
+#define LABEL_COUNT 48
 static lv_obj_t *s_boxes[BOX_COUNT], *s_labels[LABEL_COUNT];
 static unsigned s_box_used, s_label_used;
 static bool s_dirty = true;
 static uint64_t s_render_signature;
 static const char *const home_names[] = {
-    "概览", "喂奶", "睡眠", "尿布", "声音", "今天", "更多"
+    "概览", "喂奶", "睡眠", "尿布", "声音", "今天", "设置", "更多"
 };
-static const char *const more_names[] = { "洗澡", "趴玩", "计时器", "设置", "后续功能" };
+static const char *const more_names[] = { "洗澡", "趴玩", "计时器", "后续功能" };
 static const char *const diaper_names[] = { "小便", "大便", "都有" };
 static const char *const sound_names[] = { "白噪声", "雨声", "海浪" };
+
+enum {
+    HOME_OVERVIEW = 0, HOME_FEED, HOME_SLEEP, HOME_DIAPER,
+    HOME_SOUND, HOME_TODAY, HOME_SETTINGS, HOME_MORE, HOME_COUNT
+};
 
 static lv_color_t color(uint32_t rgb) { return lv_color_hex(rgb); }
 
@@ -149,7 +154,7 @@ static void home(const xigua_ui_view_t *v)
     box(s_screen, 14, 102, 212, 139, 0x25413D, 18);
     label(s_screen, home_names[s_home], 26, 112, 170, 25, 0x8DD7AE, false);
     switch (s_home) {
-    case 0:
+    case HOME_OVERVIEW:
         if (feed) snprintf(buf, sizeof(buf), "上次奶瓶 %lu ml", (unsigned long)feed->value);
         else snprintf(buf, sizeof(buf), "还没有奶瓶记录");
         text_line(buf, 147, 0xFFFFFF);
@@ -157,17 +162,18 @@ static void home(const xigua_ui_view_t *v)
         else text_line("睡眠未开始", 181, 0xB9CBC5);
         if (state && xigua_active_tummy(state)) text_line("正在趴玩", 211, 0xF6D884);
         break;
-    case 1: text_line("记一次奶瓶", 155, 0xFFFFFF); break;
-    case 2: text_line(sleep ? "结束本次睡眠" : "开始睡眠", 155, 0xFFFFFF); break;
-    case 3: text_line("小便 大便", 155, 0xFFFFFF); break;
-    case 4:
+    case HOME_FEED: text_line("记一次奶瓶", 155, 0xFFFFFF); break;
+    case HOME_SLEEP: text_line(sleep ? "结束本次睡眠" : "开始睡眠", 155, 0xFFFFFF); break;
+    case HOME_DIAPER: text_line("小便 大便", 155, 0xFFFFFF); break;
+    case HOME_SOUND:
         text_line(v->audio.playing ? "声音正在播放" : "本地声音", 145, 0xFFFFFF);
         text_line("白噪声 雨声 海浪", 183, 0xB9CBC5);
         break;
-    case 5: text_line("查看已保存记录", 155, 0xFFFFFF); break;
+    case HOME_TODAY: text_line("查看已保存记录", 155, 0xFFFFFF); break;
+    case HOME_SETTINGS: text_line("Wi-Fi 与设备状态", 155, 0xFFFFFF); break;
     default: text_line("洗澡 趴玩 计时", 155, 0xFFFFFF); break;
     }
-    snprintf(buf, sizeof(buf), "%u / 7", s_home + 1);
+    snprintf(buf, sizeof(buf), "%u / %u", s_home + 1, (unsigned)HOME_COUNT);
     label(s_screen, buf, 176, 214, 45, 20, 0xB9CBC5, false);
     if (v->undo_available && state && state->undo.valid && !v->read_only &&
         (v->feedback == XIGUA_UI_IDLE || v->feedback == XIGUA_UI_SAVED)) {
@@ -312,9 +318,9 @@ static void more_page(void)
 {
     title("更多", "本地工具与设备信息");
     box(s_screen, 15, 99, 210, 145, 0x25413D, 18);
-    for (unsigned i = 0; i < 5; ++i) {
-        if (i == s_more) box(s_screen, 24, 105 + (int)i * 27, 192, 27, 0x3D7562, 8);
-        label(s_screen, more_names[i], 35, 109 + (int)i * 27, 170, 22, 0xFFFFFF, false);
+    for (unsigned i = 0; i < 4; ++i) {
+        if (i == s_more) box(s_screen, 24, 105 + (int)i * 32, 192, 29, 0x3D7562, 8);
+        label(s_screen, more_names[i], 35, 110 + (int)i * 32, 170, 22, 0xFFFFFF, false);
     }
     footer("上下选择 OK进入");
 }
@@ -369,20 +375,22 @@ static void timer_page(const xigua_ui_view_t *v)
 static void settings_page(const xigua_ui_view_t *v)
 {
     char buf[50];
-    title("设置与设备", "OK 配置 Wi-Fi 网络");
+    title("设置", "网络与设备状态");
     box(s_screen, 15, 103, 210, 142, 0x25413D, 18);
+    box(s_screen, 22, 108, 196, 50, 0x3D7562, 9);
+    text_line("Wi-Fi 网络", 111, 0xFFFFFF);
     text_line(!v->service.available ? "配置服务未启动" :
-        v->service.wifi_connected ? "网络：已连接" :
-        v->service.wifi_configured ? "网络：连接中" : "网络：待配置", 116, 0xFFFFFF);
+        v->service.wifi_connected ? "已连接" :
+        v->service.wifi_configured ? "连接中" : "待配置", 132, 0xFFFFFF);
     snprintf(buf, sizeof(buf), "时间：%s", v->now.quality == XIGUA_TIME_UNKNOWN ? "待校准" :
              v->service.timezone_configured ? v->service.local_time : "时区待配置");
-    text_line(buf, 150, 0xFFFFFF);
+    text_line(buf, 164, 0xFFFFFF);
     text_line(v->service.ai_busy ? "AI：请求中" : !v->service.ai_configured ? "AI：待配置" :
-        v->service.ai_status < 0 ? "AI：待测试" : v->service.ai_status == 0 ? "AI：测试成功" : "AI：请求失败", 184, 0xFFFFFF);
+        v->service.ai_status < 0 ? "AI：待测试" : v->service.ai_status == 0 ? "AI：测试成功" : "AI：请求失败", 191, 0xFFFFFF);
     snprintf(buf, sizeof(buf), "记录：%u/%u %s", v->state ? v->state->event_count : 0,
              XIGUA_EVENT_CAPACITY, v->service.config_read_only ? "配置只读" : "");
-    text_line(buf, 217, 0xFFFFFF);
-    footer("OK配网 长按下返回");
+    text_line(buf, 218, 0xFFFFFF);
+    footer("OK网络设置 长按下返回");
 }
 
 /* Dynamic SSIDs are bytes, not a promise of arbitrary CJK font coverage.
@@ -481,12 +489,21 @@ static void keyboard_page(void)
     } else wifi_name(buf, sizeof(buf), s_keyboard.text);
     lv_obj_t *input = label(s_screen, buf, 20, 99, 200, 25, 0x8DD7AE, false);
     lv_label_set_long_mode(input, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    for (unsigned i = 0; i < 25; ++i) {
-        const int x = 15 + (int)(i % 5) * 43;
-        const int y = 132 + (int)(i / 5) * 27;
-        if (i == s_keyboard.selection) box(s_screen, x, y, 41, 25, 0x3D7562, 5);
+    for (unsigned i = 0; i < XIGUA_KEYBOARD_CHAR_KEY_COUNT; ++i) {
+        const int x = 8 + (int)(i % 6) * 38;
+        const int y = 122 + (int)(i / 6) * 25;
+        if (i == s_keyboard.selection) box(s_screen, x, y, 35, 22, 0x3D7562, 5);
         lv_obj_t *l = label(s_screen, xigua_keyboard_label(&s_keyboard, i),
-            x, y + 2, 41, 22, 0xFFFFFF, false);
+            x, y + 1, 35, 20, 0xFFFFFF, false);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    }
+    for (unsigned i = 0; i < 5; ++i) {
+        const unsigned key = XIGUA_KEYBOARD_CHAR_KEY_COUNT + i;
+        const int x = 15 + (int)i * 43;
+        const int y = 249;
+        if (key == s_keyboard.selection) box(s_screen, x, y, 41, 24, 0x3D7562, 5);
+        lv_obj_t *l = label(s_screen, xigua_keyboard_label(&s_keyboard, (uint8_t)key),
+            x, y + 2, 41, 20, 0xFFFFFF, false);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     }
     footer("上下选键 OK输入");
@@ -742,9 +759,9 @@ xigua_ui_intent_t xigua_ui_key(xigua_ui_key_t key, const xigua_ui_view_t *v)
     if (key == XIGUA_UI_DOWN_LONG) {
         if (s_page == PAGE_HOME) return none;
         if (s_page == PAGE_VOLUME) { s_page = PAGE_SOUND; return none; }
+        if (s_page == PAGE_SETTINGS) { s_page = PAGE_HOME; return none; }
         s_page = (s_page == PAGE_BATH || s_page == PAGE_TUMMY ||
-                  s_page == PAGE_TIMER || s_page == PAGE_SETTINGS ||
-                  s_page == PAGE_LATER) ? PAGE_MORE : PAGE_HOME;
+                  s_page == PAGE_TIMER || s_page == PAGE_LATER) ? PAGE_MORE : PAGE_HOME;
         return none;
     }
     if (key == XIGUA_UI_UP_LONG && s_page != PAGE_FEED) {
@@ -755,21 +772,23 @@ xigua_ui_intent_t xigua_ui_key(xigua_ui_key_t key, const xigua_ui_view_t *v)
         return none;
     }
     if (s_page == PAGE_HOME) {
-        if (key == XIGUA_UI_UP_CLICK) s_home = (s_home + 6) % 7;
-        else if (key == XIGUA_UI_DOWN_CLICK) s_home = (s_home + 1) % 7;
+        if (key == XIGUA_UI_UP_CLICK) s_home = (s_home + HOME_COUNT - 1) % HOME_COUNT;
+        else if (key == XIGUA_UI_DOWN_CLICK) s_home = (s_home + 1) % HOME_COUNT;
         else if (key == XIGUA_UI_OK_CLICK) {
             if (v->undo_available && v->state && v->state->undo.valid && !v->read_only)
                 return intent(XIGUA_UNDO, 0);
             switch (s_home) {
-            case 0: case 5: s_stats_all_time = false; s_page = PAGE_TODAY; break;
-            case 1: {
+            case HOME_OVERVIEW: case HOME_TODAY:
+                s_stats_all_time = false; s_page = PAGE_TODAY; break;
+            case HOME_FEED: {
                 const xigua_event_t *last = v->state ? xigua_latest(v->state, XIGUA_FEED) : NULL;
                 s_feed_ml = last && last->value >= 10 && last->value <= 400 ? last->value : 150;
                 s_feed_edit = false; s_page = PAGE_FEED; break;
             }
-            case 2: s_page = PAGE_SLEEP; break;
-            case 3: s_page = PAGE_DIAPER; break;
-            case 4: s_page = PAGE_SOUND; break;
+            case HOME_SLEEP: s_page = PAGE_SLEEP; break;
+            case HOME_DIAPER: s_page = PAGE_DIAPER; break;
+            case HOME_SOUND: s_page = PAGE_SOUND; break;
+            case HOME_SETTINGS: s_page = PAGE_SETTINGS; break;
             default: s_page = PAGE_MORE; break;
             }
         }
@@ -795,10 +814,10 @@ xigua_ui_intent_t xigua_ui_key(xigua_ui_key_t key, const xigua_ui_view_t *v)
         return (xigua_ui_intent_t){.audio = XIGUA_UI_AUDIO_VOLUME, .value = s_volume};
     }
     if (s_page == PAGE_MORE) {
-        if (key == XIGUA_UI_UP_CLICK) s_more = (s_more + 4) % 5;
-        else if (key == XIGUA_UI_DOWN_CLICK) s_more = (s_more + 1) % 5;
+        if (key == XIGUA_UI_UP_CLICK) s_more = (s_more + 3) % 4;
+        else if (key == XIGUA_UI_DOWN_CLICK) s_more = (s_more + 1) % 4;
         else if (key == XIGUA_UI_OK_CLICK) {
-            static const page_t pages[] = { PAGE_BATH, PAGE_TUMMY, PAGE_TIMER, PAGE_SETTINGS, PAGE_LATER };
+            static const page_t pages[] = { PAGE_BATH, PAGE_TUMMY, PAGE_TIMER, PAGE_LATER };
             s_page = pages[s_more];
         }
         return none;

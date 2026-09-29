@@ -13,7 +13,7 @@ Keep each asset in the matching subdirectory and document its destination, namin
 Store reusable font files and generated font sources in `fonts/`.
 
 The Xigua application uses [`fonts/xigua_font_16.c`](fonts/xigua_font_16.c), a
-16 px Noto Sans SC Regular subset covering 299 fixed UI/ASCII code points. Its
+16 px Noto Sans SC Regular subset covering 304 fixed UI/ASCII code points. Its
 reusable TTF, SIL OFL license, source metadata, conversion command and LVGL
 integration are documented in [Xigua UI Font](fonts/xigua-font.md).
 

@@ -25,15 +25,19 @@ The writable application descriptor falls back to Montserrat 14 for symbols.
 Recreate the bitmap font from the checked-in subset:
 
 ```text
-python assets/fonts/generate_xigua_font.py --converter /path/to/lv_font_conv/lv_font_conv.js
+python assets/fonts/generate_xigua_font.py \
+  --source-font /path/to/NotoSansSC-VF.ttf \
+  --converter /path/to/lv_font_conv/lv_font_conv.js
 python tools/check_xigua_fonts.py
 ```
 
 The generator updates [`xigua_characters.txt`](xigua_characters.txt) from all C
-string literals in `main/xigua/xigua_ui.c`, includes printable ASCII, and runs
-the cmap and bitmap descriptor checks. The current M3 inventory contains 299 unique
-code points. All 299 are covered, and U+9F98 is explicitly absent as a negative check. The earlier M0-M1 built-in
-Source Han subset lacked 61 of that stage's 252 characters. The bitmap font C file is about
-221 KB of source, and the reusable TTF source is about 71 KB; inspect firmware
+string literals in `main/xigua/xigua_ui.c` and `main/xigua/xigua_keyboard.c`,
+includes printable ASCII, rebuilds the reusable TTF subset from the original
+licensed font, and runs the cmap and bitmap descriptor checks. The current M3
+inventory contains 304 unique code points. All 304 are covered, and U+9F98 is
+explicitly absent as a negative check. The earlier M0-M1 built-in Source Han
+subset lacked 61 of that stage's 252 characters. The bitmap font C file is about
+225 KB of source, and the reusable TTF source is about 127 KB; inspect firmware
 size output for actual compiled Flash use. Rendering, alignment and runtime heap
 on the 240 × 320 board remain a separate device acceptance check.

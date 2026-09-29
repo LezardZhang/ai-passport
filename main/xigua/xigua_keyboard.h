@@ -4,10 +4,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Five rows by five columns. Four rows show characters; the final row switches
- * character sets, deletes, or accepts the edit. */
-#define XIGUA_KEYBOARD_CHAR_KEY_COUNT 20u
-#define XIGUA_KEYBOARD_KEY_COUNT 25u
+/* Six columns by five rows show one complete letter page. The separate final
+ * row switches character sets, deletes, or accepts the edit. */
+#define XIGUA_KEYBOARD_CHAR_KEY_COUNT 30u
+#define XIGUA_KEYBOARD_KEY_COUNT 35u
 #define XIGUA_KEYBOARD_MODE_COUNT 3u
 #define XIGUA_KEYBOARD_MAX_PAGE_COUNT 3u
 #define XIGUA_KEYBOARD_TEXT_CAPACITY 65u
