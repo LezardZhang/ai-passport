@@ -49,7 +49,7 @@ int main(void) {
     key(XIGUA_UI_UP_CLICK); key(XIGUA_UI_OK_CLICK); assert(s_wifi_field==0);
     key(XIGUA_UI_OK_CLICK); assert(s_keyboard.max_bytes==33);
     key(XIGUA_UI_OK_LONG); assert(s_keyboard.page==1);
-    s_keyboard.selection=XIGUA_KEYBOARD_KEY_CANCEL; key(XIGUA_UI_OK_CLICK);
+    key(XIGUA_UI_DOWN_LONG);
     assert(s_page==PAGE_WIFI_EDIT && !s_wifi_ssid[0] && saves==1);
     s_page=PAGE_VOLUME; s_volume=95;
     xigua_ui_intent_t i=xigua_ui_key(XIGUA_UI_UP_CLICK,&view);

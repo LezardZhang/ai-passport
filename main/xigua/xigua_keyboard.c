@@ -2,8 +2,7 @@
 
 #include <string.h>
 
-/* Common password characters come first; all remaining printable non-space
- * ASCII characters follow, so the five pages cover the complete set. */
+/* Printable non-space ASCII grouped as letters, digits, then punctuation. */
 static const char *const s_char_labels[94] = {
     "a", "b", "c", "d", "e", "f", "g", "h", "i", "j",
     "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",
@@ -18,7 +17,43 @@ static const char *const s_char_labels[94] = {
     "}", "~",
 };
 
-static const char *const s_control_labels[5] = { "DEL", "SPC", "PG", "DON", "ESC" };
+static const char s_space_label[] = "SPC";
+static const char *const s_control_labels[5] = {
+    "小写", "大写", "数符", "退格", "确认"
+};
+static const char *const s_mode_names[XIGUA_KEYBOARD_MODE_COUNT] = {
+    "小写", "大写", "数字符号"
+};
+
+static uint8_t character_count(xigua_keyboard_mode_t mode)
+{
+    switch (mode) {
+    case XIGUA_KEYBOARD_MODE_LOWER:
+    case XIGUA_KEYBOARD_MODE_UPPER:
+        return 27u; /* 26 letters plus space. */
+    case XIGUA_KEYBOARD_MODE_SYMBOLS:
+        return 43u; /* Digits, punctuation, then space. */
+    default:
+        return 0u;
+    }
+}
+
+static const char *character_label(xigua_keyboard_mode_t mode, uint8_t index)
+{
+    uint8_t count = character_count(mode);
+    if (index >= count) return "";
+    if (index == count - 1u) return s_space_label;
+    uint8_t base = 0u;
+    if (mode == XIGUA_KEYBOARD_MODE_UPPER) base = 26u;
+    else if (mode == XIGUA_KEYBOARD_MODE_SYMBOLS) base = 52u;
+    return s_char_labels[(size_t)base + index];
+}
+
+static char character_value(xigua_keyboard_mode_t mode, uint8_t index)
+{
+    const char *label = character_label(mode, index);
+    return label == s_space_label ? ' ' : label[0];
+}
 
 static size_t utf8_codepoint_bytes(unsigned char lead)
 {
@@ -68,8 +103,9 @@ bool xigua_keyboard_key_enabled(const xigua_keyboard_t *keyboard, uint8_t index)
 {
     if (!keyboard || index >= XIGUA_KEYBOARD_KEY_COUNT) return false;
     if (index >= XIGUA_KEYBOARD_CHAR_KEY_COUNT) return true;
-    const size_t character_index = (size_t)keyboard->page * XIGUA_KEYBOARD_CHAR_KEY_COUNT + index;
-    return character_index < 94;
+    const size_t character_index =
+        (size_t)keyboard->page * XIGUA_KEYBOARD_CHAR_KEY_COUNT + index;
+    return character_index < character_count((xigua_keyboard_mode_t)keyboard->mode);
 }
 
 static uint8_t enabled_at_or_after(const xigua_keyboard_t *keyboard, uint8_t start)
@@ -101,13 +137,32 @@ void xigua_keyboard_move(xigua_keyboard_t *keyboard, int delta)
     keyboard->selection = cursor;
 }
 
+bool xigua_keyboard_set_mode(xigua_keyboard_t *keyboard,
+                             xigua_keyboard_mode_t mode)
+{
+    if (!keyboard || keyboard->finished || keyboard->cancelled ||
+        mode >= XIGUA_KEYBOARD_MODE_COUNT) return false;
+    keyboard->mode = (uint8_t)mode;
+    keyboard->page = 0;
+    return true;
+}
+
 void xigua_keyboard_next_page(xigua_keyboard_t *keyboard)
 {
-    if (!keyboard) return;
-    keyboard->page = (uint8_t)((keyboard->page + 1u) % XIGUA_KEYBOARD_PAGE_COUNT);
+    if (!keyboard || keyboard->finished || keyboard->cancelled) return;
+    uint8_t pages = xigua_keyboard_page_count(keyboard);
+    if (pages == 0) return;
+    keyboard->page = (uint8_t)((keyboard->page + 1u) % pages);
     if (!xigua_keyboard_key_enabled(keyboard, keyboard->selection)) {
         keyboard->selection = enabled_at_or_after(keyboard, 0);
     }
+}
+
+bool xigua_keyboard_cancel(xigua_keyboard_t *keyboard)
+{
+    if (!keyboard || keyboard->finished || keyboard->cancelled) return false;
+    keyboard->cancelled = true;
+    return true;
 }
 
 static xigua_keyboard_result_t insert_byte(xigua_keyboard_t *keyboard, char value)
@@ -136,23 +191,26 @@ xigua_keyboard_result_t xigua_keyboard_press(xigua_keyboard_t *keyboard)
     const uint8_t selected = keyboard->selection;
     if (!xigua_keyboard_key_enabled(keyboard, selected)) return XIGUA_KEYBOARD_NOOP;
     if (selected < XIGUA_KEYBOARD_CHAR_KEY_COUNT) {
-        size_t index = (size_t)keyboard->page * XIGUA_KEYBOARD_CHAR_KEY_COUNT + selected;
-        return insert_byte(keyboard, s_char_labels[index][0]);
+        uint8_t index =
+            (uint8_t)(keyboard->page * XIGUA_KEYBOARD_CHAR_KEY_COUNT + selected);
+        return insert_byte(keyboard,
+                           character_value((xigua_keyboard_mode_t)keyboard->mode, index));
     }
     switch (selected) {
+    case XIGUA_KEYBOARD_KEY_LOWER:
+        xigua_keyboard_set_mode(keyboard, XIGUA_KEYBOARD_MODE_LOWER);
+        return XIGUA_KEYBOARD_MODE_CHANGED;
+    case XIGUA_KEYBOARD_KEY_UPPER:
+        xigua_keyboard_set_mode(keyboard, XIGUA_KEYBOARD_MODE_UPPER);
+        return XIGUA_KEYBOARD_MODE_CHANGED;
+    case XIGUA_KEYBOARD_KEY_SYMBOLS:
+        xigua_keyboard_set_mode(keyboard, XIGUA_KEYBOARD_MODE_SYMBOLS);
+        return XIGUA_KEYBOARD_MODE_CHANGED;
     case XIGUA_KEYBOARD_KEY_DEL:
         return delete_codepoint(keyboard);
-    case XIGUA_KEYBOARD_KEY_SPACE:
-        return insert_byte(keyboard, ' ');
-    case XIGUA_KEYBOARD_KEY_PAGE:
-        xigua_keyboard_next_page(keyboard);
-        return XIGUA_KEYBOARD_PAGE_CHANGED;
     case XIGUA_KEYBOARD_KEY_DONE:
         keyboard->finished = true;
         return XIGUA_KEYBOARD_DONE;
-    case XIGUA_KEYBOARD_KEY_CANCEL:
-        keyboard->cancelled = true;
-        return XIGUA_KEYBOARD_CANCEL;
     default:
         return XIGUA_KEYBOARD_NOOP;
     }
@@ -162,8 +220,23 @@ const char *xigua_keyboard_label(const xigua_keyboard_t *keyboard, uint8_t index
 {
     if (!xigua_keyboard_key_enabled(keyboard, index)) return "";
     if (index < XIGUA_KEYBOARD_CHAR_KEY_COUNT) {
-        size_t character_index = (size_t)keyboard->page * XIGUA_KEYBOARD_CHAR_KEY_COUNT + index;
-        return s_char_labels[character_index];
+        uint8_t character_index =
+            (uint8_t)(keyboard->page * XIGUA_KEYBOARD_CHAR_KEY_COUNT + index);
+        return character_label((xigua_keyboard_mode_t)keyboard->mode, character_index);
     }
     return s_control_labels[index - XIGUA_KEYBOARD_CHAR_KEY_COUNT];
+}
+
+uint8_t xigua_keyboard_page_count(const xigua_keyboard_t *keyboard)
+{
+    if (!keyboard || keyboard->mode >= XIGUA_KEYBOARD_MODE_COUNT) return 0;
+    uint8_t count = character_count((xigua_keyboard_mode_t)keyboard->mode);
+    return (uint8_t)((count + XIGUA_KEYBOARD_CHAR_KEY_COUNT - 1u) /
+                     XIGUA_KEYBOARD_CHAR_KEY_COUNT);
+}
+
+const char *xigua_keyboard_mode_name(const xigua_keyboard_t *keyboard)
+{
+    if (!keyboard || keyboard->mode >= XIGUA_KEYBOARD_MODE_COUNT) return "";
+    return s_mode_names[keyboard->mode];
 }

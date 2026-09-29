@@ -470,9 +470,11 @@ static void wifi_edit_page(const xigua_ui_view_t *v)
 static void keyboard_page(void)
 {
     char buf[160];
-    snprintf(buf, sizeof(buf), "长OK换页 %u/5 长下取消", s_keyboard.page + 1);
+    snprintf(buf, sizeof(buf), "%s %u/%u 长OK换页 长下取消",
+        xigua_keyboard_mode_name(&s_keyboard), s_keyboard.page + 1,
+        xigua_keyboard_page_count(&s_keyboard));
     title(s_keyboard_password ? "输入网络密码" : "输入网络名称",
-          s_keyboard_full ? "输入已满 DEL删除" : buf);
+          s_keyboard_full ? "输入已满 退格删除" : buf);
     if (s_keyboard_password) {
         size_t n = strlen(s_keyboard.text);
         snprintf(buf, sizeof(buf), "%u: %s", (unsigned)n, n ? "********" : "");
@@ -671,6 +673,7 @@ xigua_ui_intent_t xigua_ui_key(xigua_ui_key_t key, const xigua_ui_view_t *v)
      * Service calls below only enqueue work; no networking/NVS under LVGL. */
     if (s_page == PAGE_KEYBOARD) {
         if (key == XIGUA_UI_DOWN_LONG) {
+            xigua_keyboard_cancel(&s_keyboard);
             memset(&s_keyboard, 0, sizeof(s_keyboard));
             s_page = PAGE_WIFI_EDIT;
         } else if (key == XIGUA_UI_OK_LONG) xigua_keyboard_next_page(&s_keyboard);
