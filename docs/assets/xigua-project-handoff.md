@@ -36,6 +36,7 @@ Normal flashing overwrites the bootloader, partition table, and factory applicat
 - Device flash and boot: PASS. The merged image was written and hash-verified over USB Serial/JTAG.
 - Device Wi-Fi: PASS in the observed retry scenario. The device logged reason 2 once, retried automatically, connected to `Lezard2.4G`, obtained an IP, and started SNTP.
 - Device HTTPS and MiMo text self-check: PASS. The secure log shows certificate validation, HTTP status 200 from the public probe, MiMo status 200, and `ESP_OK` from the text self-check.
+- Most recent flash confirmation: PASS. The device connected directly with WPA3-SAE on `Lezard2.4G`, obtained `192.168.50.115`, validated the certificate, and completed the MiMo self-check without an HTTP or TLS error.
 - Device voice ASR and TTS: NOT RUN end to end in this round. The capture and upload path is implemented, but a confirmed microphone phrase, ASR transcript, model reply, and speaker playback still need device acceptance.
 
 ## Remaining work
