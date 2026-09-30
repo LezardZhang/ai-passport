@@ -49,8 +49,8 @@ prefix so more text fits. Dynamic fallback glyphs in compact menus still need
 visual acceptance, because fallback metrics can differ from the primary font.
 
 The generated font object occupies 4,050,047 bytes of read-only data and no
-`.data`/`.bss`. The integrated application is 5,762,928 bytes in the existing
-6,225,920-byte factory partition, leaving 462,992 bytes. NVS and the 2 MiB
+`.data`/`.bss`. The integrated application is 5,773,120 bytes in the existing
+6,225,920-byte factory partition, leaving 452,800 bytes. NVS and the 2 MiB
 temporary voice partition retain their layout.
 
 The AI UI now pages replies in a clipped viewport, with a 4096-byte reply buffer
