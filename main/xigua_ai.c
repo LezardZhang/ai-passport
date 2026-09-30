@@ -415,8 +415,8 @@ static esp_err_t record_voice(size_t *wav_bytes_out)
     }
 
     uint8_t header[XIGUA_AI_WAV_HEADER_BYTES] = { 0 };
-    err = esp_partition_write(partition, 0, header, sizeof(header));
-    if (err != ESP_OK) return err;
+    /* Leave the erased header untouched until the final length is known.
+     * Programming a zero placeholder would prevent the final 0-to-1 bits. */
     uint8_t pcm[XIGUA_AI_AUDIO_CHUNK_BYTES];
     size_t captured = 0;
     const size_t min_pcm = XIGUA_AI_VOICE_MIN_SECONDS * XIGUA_AI_VOICE_HZ *
@@ -546,7 +546,10 @@ static esp_err_t asr_stream(size_t wav_bytes, char *transcript, size_t transcrip
     int status = client ? esp_http_client_get_status_code(client) : 0;
     ESP_LOGI(TAG, "ASR response status=%d err=%s body=%u", status,
              esp_err_to_name(err), (unsigned)strlen(body_data));
-    if (err == ESP_OK && (status < 200 || status >= 300)) err = ESP_FAIL;
+    if (err == ESP_OK && (status < 200 || status >= 300)) {
+        ESP_LOGW(TAG, "ASR error body=%.*s", 240, body_data);
+        err = status == 401 || status == 403 ? ESP_ERR_INVALID_CRC : ESP_FAIL;
+    }
     if (err == ESP_OK) {
         cJSON *root = cJSON_Parse(body_data);
         cJSON *choices = root ? cJSON_GetObjectItem(root, "choices") : NULL;

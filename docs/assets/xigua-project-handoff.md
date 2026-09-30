@@ -77,7 +77,13 @@ Next, run the remaining device acceptance sequence: scan/select/password entry, 
 
 ## MiMo credential correction (2026-09-30)
 
-The model self-check failure was caused by a different standard API key stored in the tracked header while using the Token Plan endpoint. The owner supplied the intended Token Plan key; it is now stored in `main/xigua_ai_credentials.h`, keeping the Token Plan endpoint unchanged. Both a minimal request and the firmware self-check payload returned HTTP 200 with `OK` from the host using the corrected key. Credential values are omitted here. Firmware and device verification are pending this checkpoint.
+The model self-check failure was caused by a different standard API key stored in the tracked header while using the Token Plan endpoint. The owner supplied the intended Token Plan key; it is now stored in `main/xigua_ai_credentials.h`, keeping the Token Plan endpoint unchanged. Both a minimal request and the firmware self-check payload returned HTTP 200 with `OK` from the host using the corrected key. Credential values are omitted here. Build, merged-image and archive verification PASS. Source checkpoint: `e6abf939cd0b79b0bc0014922ac1abb60dd97580`; merged SHA-256: `99bdff4dc34096ce29489283199292393ac6da2ce46c1e66d300c83ce869e207`. COM6 segmented flash preserved NVS; the matching ELF prefix `641f85239` booted, automatically connected to Wi-Fi, and completed the public HTTPS probe and MiMo text self-check with HTTP 200 / `ESP_OK`.
+
+## Voice WAV header fix (2026-09-30)
+
+A three-second device recording completed, but ASR returned HTTP 400 with a 134-byte body. The recording code first programmed a zero WAV header into NOR Flash, then tried to overwrite it with the final RIFF header without another erase. Zero bits cannot be restored by programming, so the audio header was invalid. A host request with a zero header reproduced HTTP 400 and the same 134-byte invalid-audio-format response; a valid WAV request using the same Token Plan key returned HTTP 200.
+
+The recorder now leaves the erased header area untouched while writing PCM and programs the final header once. ASR failures log a bounded response preview. The new host regression compiles the actual capture functions against a NOR Flash model and checks RIFF lengths, PCM, minimum/maximum recordings, and an interrupted capture. It passes; firmware and device verification for this audio change are pending.
 
 ## Remaining work
 

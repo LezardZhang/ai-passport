@@ -77,7 +77,13 @@
 
 ## MiMo 凭据修正（2026-09-30）
 
-模型自检失败的原因是 Git 管理的头文件保存了另一个普通 API Key，却使用 Token Plan 接口。所有者已提供正确的 Token Plan Key，现已保存到 `main/xigua_ai_credentials.h`，Token Plan 地址保持不变。使用修正后的 Key 在主机上执行最小请求和固件自检原始请求，均返回 HTTP 200 和 `OK`。本文不记录凭据值。本检查点尚待固件和实机验证。
+模型自检失败的原因是 Git 管理的头文件保存了另一个普通 API Key，却使用 Token Plan 接口。所有者已提供正确的 Token Plan Key，现已保存到 `main/xigua_ai_credentials.h`，Token Plan 地址保持不变。使用修正后的 Key 在主机上执行最小请求和固件自检原始请求，均返回 HTTP 200 和 `OK`。本文不记录凭据值。Build、合并镜像和归档校验 PASS。源码检查点为 `e6abf939cd0b79b0bc0014922ac1abb60dd97580`，合并 SHA-256 为 `99bdff4dc34096ce29489283199292393ac6da2ce46c1e66d300c83ce869e207`。COM6 分段刷写保留 NVS；匹配的 ELF 前缀 `641f85239` 启动正常，自动连上 Wi-Fi，公共 HTTPS 探测和 MiMo 文本自检均返回 HTTP 200 / `ESP_OK`。
+
+## 录音 WAV 文件头修复（2026-09-30）
+
+实机完成了约三秒录音，但 ASR 返回 HTTP 400、134 字节响应。录音代码先把全零 WAV 文件头写入 NOR Flash，结束时未擦除就覆盖为最终 RIFF 文件头；写入无法把零位恢复为一，因此音频头无效。主机使用全零文件头复现了 HTTP 400 和相同的 134 字节“音频格式无效”响应；相同 Token Plan Key 配合有效 WAV 则返回 HTTP 200。
+
+录音实现现已改为采集 PCM 时保留已擦除的文件头区域，结束后只写一次最终文件头；ASR 失败增加有限长度的响应片段日志。新增主机回归测试编译实际录音函数，模拟 NOR Flash，检查 RIFF 长度、PCM、最短／最长录音和中途采集失败。测试通过；此录音改动的固件和实机验证尚待完成。
 
 ## 尚未完成和待改进
 
