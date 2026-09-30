@@ -1,0 +1,15 @@
+#pragma once
+
+// Copy this file to quota_config_local.h and fill in local values.
+// quota_config_local.h is ignored by Git and must never be committed.
+
+#define QUOTA_WIFI_SSID "your-wifi-ssid"
+#define QUOTA_WIFI_PASSWORD "your-wifi-password"
+
+// Use the root URL only. The application appends the fixed read-only paths.
+#define QUOTA_API_BASE_URL "http://your-cockpit-host"
+#define QUOTA_API_USERNAME "your-read-only-username"
+#define QUOTA_API_PASSWORD "your-read-only-password"
+
+// Keep disabled unless you knowingly accept Basic Auth over plaintext HTTP.
+#define QUOTA_ALLOW_INSECURE_HTTP 0
