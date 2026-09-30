@@ -249,6 +249,26 @@ about eight seconds. Public HTTPS and MiMo text self-check returned HTTP 200 /
 panic or allocation failure appeared in this window. Physical sleep navigation,
 voice record persistence and formatted reply rendering remain pending acceptance.
 
+## Feeding timestamps (2026-09-30)
+
+Feeding records now expose the trusted event epoch end to end. Voice and manual
+confirmations show the recorded date/time, and Today pages list recent feeding
+time, amount, and ingredient. The existing event ring and NVS layout remain
+compatible; events without a trusted wall clock are not presented as a guessed
+date. Host coverage verifies the stored epoch, ring lookup, and formatted detail.
+
+Build and archive verification PASS with source checkpoint `f17599c` and merged
+image SHA-256 `94f509e3b479cfafe2f867f83b21c1cd15f9fb76598a8008cb6cff5f49f49bfc`.
+The matching ELF SHA-256 is
+`e96e63d5c512f6f9fcef28c3640bf354896e021527989c2d901a0b3702e970ea` and the
+verified archive is `build/firmware/94f509e3b479cfafe2f867f83b21c1cd15f9fb76598a8008cb6cff5f49f49bfc/`.
+The 5,776,384-byte application leaves 0x6dc00 bytes free in the 0x5f0000-byte
+factory partition. COM6 segmented flash completed with NVS and `voice_tmp`
+preserved. Startup connected to the built-in `GUANTANG_2.4G`, obtained
+`192.168.10.214`, passed the public HTTPS probe with HTTP 200, and passed the
+MiMo text self-check with `ESP_OK`. Physical feeding entry and Today-page
+rendering still need user acceptance.
+
 ## Remaining work
 
 The menu and AI reader have been redesigned, but font size and reading comfort on the 240x320 display still need physical review. The reply buffer is 4096 bytes with paging; replies beyond the local or server limit remain partial. Physically verify voice records against Today, plain reply rendering, and sleep start → other page → sleep end, including a reboot during sleep.
