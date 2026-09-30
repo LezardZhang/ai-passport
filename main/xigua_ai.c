@@ -83,6 +83,11 @@
 #define XIGUA_AI_VOICE_PARTITION_LABEL "voice_tmp"
 #define XIGUA_AI_VOICE_FLASH_CHUNK_BYTES 3072
 #define XIGUA_AI_VOICE_B64_CHUNK_BYTES 4100
+#define XIGUA_AI_TTS_HZ 24000
+#define XIGUA_AI_TTS_BITS 16
+#define XIGUA_AI_TTS_CHANNELS 1
+#define XIGUA_AI_TTS_LINE_MAX 16384
+#define XIGUA_AI_TTS_PCM_MAX 12288
 
 static const char *TAG = "xigua_ai";
 static const char s_system_prompt[] =
@@ -107,6 +112,10 @@ static const char s_system_prompt[] =
     "优先在500个汉字以内完整回答，复杂问题概括关键内容，必须以完整句子收尾。"
     "纯文本是设备的硬件显示约束，优先于用户的排版请求。即使用户要求Markdown或emoji，"
     "也只能用普通文字段落表达，绝不能输出这些格式或符号。记录命令仍严格只返回JSON。";
+static const char s_story_system_prompt[] =
+    "你是儿童故事讲述助手。根据用户口述的主题，讲一个适合宝宝听的温柔短故事。"
+    "只输出故事正文，不解释、不复述要求、不使用Markdown、标题、列表、代码块、emoji、"
+    "特殊装饰符号或空行，只用普通文字和常规标点。控制在300个汉字以内，必须完整收尾。";
 static const char *const s_models[XIGUA_AI_MODEL_COUNT] = {
     XIGUA_AI_CHAT_MODEL,
     XIGUA_AI_CHAT_PRO_MODEL,
@@ -123,12 +132,14 @@ typedef struct {
         XIGUA_AI_REQUEST_TEXT = 0,
         XIGUA_AI_REQUEST_VOICE,
     } kind;
+    bool story;
     char prompt[XIGUA_AI_PROMPT_MAX];
 } xigua_ai_request_t;
 
 typedef struct {
     esp_err_t error;
     bool truncated;
+    bool audio_failed;
     char text[XIGUA_AI_REPLY_BYTES];
 } xigua_ai_result_t;
 
@@ -175,7 +186,7 @@ static esp_err_t http_event(esp_http_client_event_t *event)
     return ESP_OK;
 }
 
-static esp_err_t build_request(const char *prompt, char **payload)
+static esp_err_t build_request(const char *prompt, const char *system_prompt, char **payload)
 {
     cJSON *root = cJSON_CreateObject();
     cJSON *messages = cJSON_CreateArray();
@@ -190,7 +201,7 @@ static esp_err_t build_request(const char *prompt, char **payload)
     cJSON_AddBoolToObject(root, "enable_thinking", false);
     cJSON_AddBoolToObject(root, "stream", false);
     cJSON_AddStringToObject(system, "role", "system");
-    cJSON_AddStringToObject(system, "content", s_system_prompt);
+    cJSON_AddStringToObject(system, "content", system_prompt ? system_prompt : s_system_prompt);
     cJSON_AddStringToObject(user, "role", "user");
     cJSON_AddStringToObject(user, "content", prompt);
     cJSON_AddItemToArray(messages, system);
@@ -278,11 +289,12 @@ static esp_err_t post_json(const char *payload, char *response, size_t response_
     return err;
 }
 
-static esp_err_t request_once_sized(const char *prompt, char *response, size_t response_size,
-                                    size_t body_capacity)
+static esp_err_t request_once_sized_prompt(const char *prompt, const char *system_prompt,
+                                           char *response, size_t response_size,
+                                           size_t body_capacity)
 {
     char *payload = NULL;
-    esp_err_t err = build_request(prompt, &payload);
+    esp_err_t err = build_request(prompt, system_prompt, &payload);
     if (err != ESP_OK) return err;
     err = post_json(payload, response, response_size, body_capacity);
     free(payload);
@@ -291,7 +303,21 @@ static esp_err_t request_once_sized(const char *prompt, char *response, size_t r
 
 static esp_err_t request_once(const char *prompt, char *response, size_t response_size)
 {
-    return request_once_sized(prompt, response, response_size, XIGUA_AI_HTTP_BODY_MAX);
+    return request_once_sized_prompt(prompt, s_system_prompt, response, response_size,
+                                     XIGUA_AI_HTTP_BODY_MAX);
+}
+
+static esp_err_t request_once_story(const char *prompt, char *response, size_t response_size)
+{
+    return request_once_sized_prompt(prompt, s_story_system_prompt, response, response_size,
+                                     XIGUA_AI_HTTP_BODY_MAX);
+}
+
+static esp_err_t request_once_sized(const char *prompt, char *response, size_t response_size,
+                                    size_t body_capacity)
+{
+    return request_once_sized_prompt(prompt, s_system_prompt, response, response_size,
+                                     body_capacity);
 }
 
 static bool probe_public_https(void)
@@ -401,6 +427,180 @@ static esp_err_t write_http_all(esp_http_client_handle_t client, const char *dat
         length -= (size_t)written;
     }
     return ESP_OK;
+}
+
+static esp_err_t tts_consume_sse_line(char *line, uint8_t *pcm, size_t pcm_capacity,
+                                      bool *done, bool *saw_audio)
+{
+    if (!line || !pcm || !done || !saw_audio) return ESP_ERR_INVALID_ARG;
+    char *data = line;
+    while (*data == ' ' || *data == '\t' || *data == '\r') data++;
+    if (strncmp(data, "data:", 5) != 0) return ESP_OK;
+    data += 5;
+    while (*data == ' ' || *data == '\t') data++;
+    size_t length = strlen(data);
+    while (length > 0 && (data[length - 1] == ' ' || data[length - 1] == '\t' ||
+                          data[length - 1] == '\r')) {
+        data[--length] = '\0';
+    }
+    if (strcmp(data, "[DONE]") == 0) {
+        *done = true;
+        return ESP_OK;
+    }
+    if (!data[0]) return ESP_OK;
+
+    cJSON *root = cJSON_ParseWithLength(data, length);
+    cJSON *choices = root ? cJSON_GetObjectItem(root, "choices") : NULL;
+    cJSON *choice = cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : NULL;
+    cJSON *delta = choice ? cJSON_GetObjectItem(choice, "delta") : NULL;
+    cJSON *audio = delta ? cJSON_GetObjectItem(delta, "audio") : NULL;
+    cJSON *encoded = audio ? cJSON_GetObjectItem(audio, "data") : NULL;
+    esp_err_t err = ESP_OK;
+    if (cJSON_IsString(encoded) && encoded->valuestring && encoded->valuestring[0]) {
+        size_t decoded = 0;
+        int rc = mbedtls_base64_decode(pcm, pcm_capacity, &decoded,
+                                       (const unsigned char *)encoded->valuestring,
+                                       strlen(encoded->valuestring));
+        if (rc != 0 || decoded == 0) err = ESP_ERR_INVALID_RESPONSE;
+        else {
+            err = bsp_audio_write(pcm, decoded);
+            if (err == ESP_OK) *saw_audio = true;
+        }
+    }
+    cJSON_Delete(root);
+    return err;
+}
+
+static esp_err_t tts_stream(const char *text)
+{
+    if (!text || !text[0]) return ESP_ERR_INVALID_ARG;
+    esp_err_t err = bsp_audio_wake();
+    if (err != ESP_OK) err = bsp_audio_init();
+    if (err == ESP_OK) err = bsp_audio_set_format(XIGUA_AI_TTS_HZ, XIGUA_AI_TTS_BITS,
+                                                   XIGUA_AI_TTS_CHANNELS);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "TTS audio init failed: %s", esp_err_to_name(err));
+        (void)bsp_audio_sleep();
+        return err;
+    }
+    bsp_audio_set_volume(80);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *messages = cJSON_CreateArray();
+    cJSON *user = cJSON_CreateObject();
+    cJSON *assistant = cJSON_CreateObject();
+    cJSON *audio = cJSON_CreateObject();
+    char *payload = NULL;
+    if (!root || !messages || !user || !assistant || !audio) {
+        err = ESP_ERR_NO_MEM;
+        goto tts_cleanup_json;
+    }
+    cJSON_AddStringToObject(root, "model", XIGUA_AI_TTS_MODEL);
+    cJSON_AddBoolToObject(root, "stream", true);
+    cJSON_AddStringToObject(user, "role", "user");
+    cJSON_AddStringToObject(user, "content", "请用温柔、慢一点、适合宝宝的语气朗读下面的故事。");
+    cJSON_AddStringToObject(assistant, "role", "assistant");
+    cJSON_AddStringToObject(assistant, "content", text);
+    cJSON_AddStringToObject(audio, "format", "pcm16");
+    cJSON_AddStringToObject(audio, "voice", "mimo_default");
+    cJSON_AddItemToArray(messages, user);
+    user = NULL;
+    cJSON_AddItemToArray(messages, assistant);
+    assistant = NULL;
+    cJSON_AddItemToObject(root, "messages", messages);
+    messages = NULL;
+    cJSON_AddItemToObject(root, "audio", audio);
+    audio = NULL;
+    payload = cJSON_PrintUnformatted(root);
+    if (!payload) {
+        err = ESP_ERR_NO_MEM;
+        goto tts_cleanup_json;
+    }
+
+    char url[256];
+    int written = snprintf(url, sizeof(url), "%s/chat/completions", XIGUA_AI_BASE_URL);
+    if (written < 0 || (size_t)written >= sizeof(url)) {
+        err = ESP_ERR_INVALID_SIZE;
+        goto tts_cleanup_json;
+    }
+    esp_http_client_config_t config = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 45000,
+        .buffer_size = 2048,
+        .buffer_size_tx = 1024,
+        .keep_alive_enable = false,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        err = ESP_ERR_NO_MEM;
+        goto tts_cleanup_json;
+    }
+    char auth[320];
+    int auth_len = snprintf(auth, sizeof(auth), "Bearer %s", XIGUA_AI_API_KEY);
+    if (auth_len > 0 && (size_t)auth_len < sizeof(auth)) {
+        esp_http_client_set_header(client, "Authorization", auth);
+    }
+    esp_http_client_set_header(client, "api-key", XIGUA_AI_API_KEY);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "Accept", "text/event-stream");
+    err = esp_http_client_open(client, (int)strlen(payload));
+    if (err == ESP_OK) err = write_http_all(client, payload, strlen(payload));
+    if (err == ESP_OK && esp_http_client_fetch_headers(client) < 0) {
+        err = ESP_FAIL;
+        log_http_connect_diagnostics(client, "TTS fetch_headers", err);
+    }
+    int status = esp_http_client_get_status_code(client);
+    uint8_t *pcm = malloc(XIGUA_AI_TTS_PCM_MAX);
+    char *line = calloc(1, XIGUA_AI_TTS_LINE_MAX);
+    bool done = false;
+    bool saw_audio = false;
+    size_t line_length = 0;
+    if (!pcm || !line) err = ESP_ERR_NO_MEM;
+    while (err == ESP_OK && !done) {
+        char chunk[1024];
+        int count = esp_http_client_read(client, chunk, sizeof(chunk));
+        if (count < 0) {
+            err = ESP_FAIL;
+            break;
+        }
+        if (count == 0) break;
+        for (int i = 0; i < count && err == ESP_OK; ++i) {
+            char ch = chunk[i];
+            if (ch == '\n') {
+                line[line_length] = '\0';
+                err = tts_consume_sse_line(line, pcm, XIGUA_AI_TTS_PCM_MAX, &done, &saw_audio);
+                line_length = 0;
+            } else if (line_length + 1 >= XIGUA_AI_TTS_LINE_MAX) {
+                err = ESP_ERR_NO_MEM;
+            } else {
+                line[line_length++] = ch;
+            }
+        }
+    }
+    if (err == ESP_OK && line_length > 0 && !done) {
+        line[line_length] = '\0';
+        err = tts_consume_sse_line(line, pcm, XIGUA_AI_TTS_PCM_MAX, &done, &saw_audio);
+    }
+    if (err == ESP_OK && (status < 200 || status >= 300)) err = ESP_FAIL;
+    if (err == ESP_OK && !saw_audio) err = ESP_ERR_INVALID_RESPONSE;
+    ESP_LOGI(TAG, "TTS response status=%d err=%s audio=%s", status, esp_err_to_name(err),
+             saw_audio ? "yes" : "no");
+    free(pcm);
+    free(line);
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+tts_cleanup_json:
+    free(payload);
+    cJSON_Delete(root);
+    cJSON_Delete(messages);
+    cJSON_Delete(user);
+    cJSON_Delete(assistant);
+    cJSON_Delete(audio);
+    (void)bsp_audio_sleep();
+    return err;
 }
 
 static esp_err_t record_voice(size_t *wav_bytes_out)
@@ -605,8 +805,9 @@ static esp_err_t asr_stream(size_t wav_bytes, char *transcript, size_t transcrip
     return err;
 }
 
-static esp_err_t voice_once(char *response, size_t response_size)
+static esp_err_t voice_once(char *response, size_t response_size, bool story, bool *audio_failed)
 {
+    if (audio_failed) *audio_failed = false;
     size_t wav_bytes = 0;
     s_voice_phase = XIGUA_AI_VOICE_RECORDING;
     esp_err_t err = record_voice(&wav_bytes);
@@ -628,7 +829,19 @@ static esp_err_t voice_once(char *response, size_t response_size)
 
     ESP_LOGI(TAG, "ASR transcript length=%u", (unsigned)strlen(transcript));
     s_voice_phase = XIGUA_AI_VOICE_THINKING;
-    err = request_once(transcript, response, response_size);
+    err = story ? request_once_story(transcript, response, response_size) :
+                  request_once(transcript, response, response_size);
+    if (err == ESP_OK && story) {
+        /* Apply the same display cleanup before sending text to the speaker. */
+        xigua_text_plain_reply(response);
+        s_voice_phase = XIGUA_AI_VOICE_SPEAKING;
+        s_voice_stop = false;
+        esp_err_t tts_err = tts_stream(response);
+        if (tts_err != ESP_OK) {
+            ESP_LOGE(TAG, "story TTS failed: %s", esp_err_to_name(tts_err));
+            if (audio_failed) *audio_failed = true;
+        }
+    }
     if (err != ESP_OK) ESP_LOGE(TAG, "chat request failed: %s", esp_err_to_name(err));
     s_voice_phase = XIGUA_AI_VOICE_IDLE;
     s_voice_stop = false;
@@ -666,7 +879,8 @@ static void ai_task(void *arg)
         result.error = ESP_FAIL;
         if (!xigua_ai_configured()) result.error = ESP_ERR_INVALID_STATE;
         else if (request.kind == XIGUA_AI_REQUEST_VOICE) {
-            result.error = voice_once(result.text, sizeof(result.text));
+            result.error = voice_once(result.text, sizeof(result.text), request.story,
+                                      &result.audio_failed);
         } else {
             result.error = request_once(request.prompt, result.text, sizeof(result.text));
         }
@@ -719,22 +933,32 @@ const char *xigua_ai_model(xigua_ai_model_t model)
 esp_err_t xigua_ai_request_text(const char *prompt)
 {
     if (!s_requests || !prompt || !prompt[0]) return ESP_ERR_INVALID_ARG;
-    xigua_ai_request_t request = { .kind = XIGUA_AI_REQUEST_TEXT };
+    xigua_ai_request_t request = { .kind = XIGUA_AI_REQUEST_TEXT, .story = false };
     size_t len = strnlen(prompt, sizeof(request.prompt));
     if (len >= sizeof(request.prompt)) return ESP_ERR_INVALID_SIZE;
     memcpy(request.prompt, prompt, len + 1);
     return xQueueOverwrite(s_requests, &request) == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t xigua_ai_request_voice(void)
+static esp_err_t request_voice_kind(bool story)
 {
     if (!s_requests) return ESP_ERR_INVALID_STATE;
     if (s_voice_phase != XIGUA_AI_VOICE_IDLE) return ESP_ERR_INVALID_STATE;
     s_voice_stop = false;
-    xigua_ai_request_t request = { .kind = XIGUA_AI_REQUEST_VOICE };
+    xigua_ai_request_t request = { .kind = XIGUA_AI_REQUEST_VOICE, .story = story };
     if (xQueueOverwrite(s_requests, &request) != pdPASS) return ESP_FAIL;
     s_voice_phase = XIGUA_AI_VOICE_RECORDING;
     return ESP_OK;
+}
+
+esp_err_t xigua_ai_request_voice(void)
+{
+    return request_voice_kind(false);
+}
+
+esp_err_t xigua_ai_request_story(void)
+{
+    return request_voice_kind(true);
 }
 
 void xigua_ai_stop_voice(void)
@@ -752,13 +976,15 @@ xigua_ai_health_t xigua_ai_health(void)
     return s_health;
 }
 
-bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error, bool *truncated)
+bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error, bool *truncated,
+                        bool *audio_failed)
 {
     if (!s_results || !text || text_size == 0) return false;
     /* This API has one consumer, the LVGL task. Keep its copy off that stack. */
     static xigua_ai_result_t result;
     if (xQueueReceive(s_results, &result, 0) != pdTRUE) return false;
     if (error) *error = result.error;
+    if (audio_failed) *audio_failed = result.audio_failed;
     if (result.error == ESP_OK) {
         bool clipped = xigua_text_copy(text, text_size, result.text);
         if (truncated) *truncated = result.truncated || clipped;

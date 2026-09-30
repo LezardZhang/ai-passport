@@ -23,6 +23,7 @@ typedef enum {
     XIGUA_AI_VOICE_RECORDING,
     XIGUA_AI_VOICE_TRANSCRIBING,
     XIGUA_AI_VOICE_THINKING,
+    XIGUA_AI_VOICE_SPEAKING,
 } xigua_ai_voice_phase_t;
 
 typedef enum {
@@ -43,9 +44,12 @@ esp_err_t xigua_ai_request_text(const char *prompt);
 
 /* Starts a push-to-talk capture; release it with xigua_ai_stop_voice(). */
 esp_err_t xigua_ai_request_voice(void);
+/* Starts a push-to-talk story capture; the completed story is spoken aloud. */
+esp_err_t xigua_ai_request_story(void);
 void xigua_ai_stop_voice(void);
 xigua_ai_voice_phase_t xigua_ai_voice_phase(void);
 xigua_ai_health_t xigua_ai_health(void);
 
 /* Called from the LVGL task to collect a completed response. */
-bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error, bool *truncated);
+bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error, bool *truncated,
+                        bool *audio_failed);

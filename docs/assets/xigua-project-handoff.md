@@ -8,15 +8,16 @@ This is the current handoff for `feature/xigua-childcare`. It records the produc
 
 ## Product direction
 
-The long-term product is a phone-independent childcare assistant on the ESP32-C3 FoloToy AI Passport. It should keep local childcare records offline, connect to a known Wi-Fi network automatically, capture a spoken request with the built-in microphone, send it to MiMo ASR and a language model, show a readable reply, and later play a TTS reply through the speaker.
+The long-term product is a phone-independent childcare assistant on the ESP32-C3 FoloToy AI Passport. It should keep local childcare records offline, connect to a known Wi-Fi network automatically, capture a spoken request with the built-in microphone, send it to MiMo ASR and a language model, show a readable reply, and play story replies through the speaker.
 
-Near-term work is to finish device voice acceptance, make the three-button information architecture clear, improve typography and long-response display, add an intentional deep self-test for ASR and TTS, and then implement TTS playback.
+Near-term work is to finish device voice acceptance, make the three-button information architecture clear, improve typography and long-response display, and add an intentional deep self-test for ASR and TTS.
 
 ## Implemented modules
 
 - `main/xigua_app.c` provides childcare records for feeding, diaper, sleep, bath, tummy time, and timers. Records are stored in NVS and the latest action can be undone. Wi-Fi has a status page and a “Search nearby Wi-Fi” action; the user selects an SSID from scan results and uses the three-page keyboard only for the password.
 - `main/xigua_wifi.c` stores the last successful station configuration, scans at boot, and tries the three built-in networks before the previous saved network. The owner-authorized built-in profiles are tracked in `main/xigua_wifi_credentials.h`. When no candidate is visible, the device exposes a local scan-and-select flow instead of Bluetooth provisioning. Authentication expiry, authentication failure, association failure, and handshake timeouts retry up to three attempts. Stale BSSID locks are cleared, PMF is optional, power save is disabled during connection, and successful credentials are persisted.
 - `main/xigua_ai.c` uses the configured OpenAI-compatible MiMo endpoint for text, ASR, and the model configuration list. `main/xigua_ai_credentials.h` stores the owner-authorized shared endpoint, key, and model settings so a fresh clone does not require repeating local setup. Voice capture is 16 kHz, 16-bit, mono WAV written to the `voice_tmp` partition, with a maximum of 60 seconds and chunked Base64 upload. Capture runs in a worker task, so button callbacks stay non-blocking.
+- The top-level menu has separate `AI assistant` and `Story` entries. Story mode uses its own plain-text system prompt, then streams the completed reply through `mimo-v2.5-tts` as 24 kHz, 16-bit, mono PCM and plays it through the BSP audio path. Ordinary AI replies remain text-only; songs and white noise are unchanged.
 - The AI worker runs an automatic health check after IP acquisition. It first performs a public HTTPS probe, waits for time synchronization, and then sends a minimal MiMo text request. Bluetooth provisioning is no longer started, leaving more heap for Wi-Fi and TLS. A successful result is cached for six hours; failures retry every two minutes. MiMo requests send the standard Bearer header plus the legacy `api-key` header, and non-2xx responses retain a bounded body preview in the log.
 - `main/xigua_font_zh16.c` and `main/xigua_font_zh20.c` cover the current UI text, punctuation, and ASCII inventory. The larger font is used for primary Chinese text and recording/self-check messages. The LXGW WenKai license is kept beside the generated font.
 - `partitions.csv` reserves `voice_tmp` for temporary recordings while keeping the application within the 8 MB flash layout.
@@ -269,11 +270,34 @@ preserved. Startup connected to the built-in `GUANTANG_2.4G`, obtained
 MiMo text self-check with `ESP_OK`. Physical feeding entry and Today-page
 rendering still need user acceptance.
 
+## Dedicated story TTS (2026-09-30)
+
+The Overview menu now has a separate Story entry after Settings. Its preparation
+page keeps the same cyan selected-card design as the main menu and AI page. Holding
+OK records a request and releasing it submits ASR; the story system prompt asks for
+short, complete plain text without Markdown, blank lines, emoji, or decorative
+symbols. After the chat reply is cleaned for display, the worker opens the MiMo
+TTS stream, decodes `delta.audio.data` Base64 chunks, and writes 24 kHz, 16-bit,
+mono PCM through the BSP audio API. The UI shows a Speaking state while playback
+runs. Ordinary AI replies still stay text-only, so this increment does not alter
+the existing record-command path.
+
+The implementation and host contract check are complete. Build, device flash,
+and physical speaker playback are intentionally separated in this turn because
+the owner requested a Git-only delivery. Build and archive verification PASS:
+application size 5,779,504 bytes, factory free 0x6cfd0 bytes, full-image
+SHA-256 `fbec5a1e7355d1b8034c597212e95734333f549cc974bfde436809cb72464f4c`,
+matching ELF SHA-256 `7211639a1701f89bc84b2e2c30a6e00598a51ccd646b32c4d0f3288257068151`,
+archive `build/firmware/fbec5a1e7355d1b8034c597212e95734333f549cc974bfde436809cb72464f4c/`.
+The source was not flashed. The next device test should use a short story request,
+verify speaker output and cancellation/re-entry behavior, and then check a normal
+AI reply to confirm it remains text-only.
+
 ## Remaining work
 
 The menu and AI reader have been redesigned, but font size and reading comfort on the 240x320 display still need physical review. The reply buffer is 4096 bytes with paging; replies beyond the local or server limit remain partial. Physically verify voice records against Today, plain reply rendering, and sleep start → other page → sleep end, including a reboot during sleep.
 
-The voice path needs a real short-phrase test, then 20–30 second and 60 second recordings, with capture duration, free heap, ASR status, transcript length, and model reply recorded. TTS playback and audio format conversion are not implemented. The automatic self-check intentionally avoids ASR and TTS usage; a user-controlled deep check should be added later.
+The voice path needs a real short-phrase test, then 20–30 second and 60 second recordings, with capture duration, free heap, ASR status, transcript length, model reply, and speaker playback recorded. The automatic self-check intentionally avoids ASR and TTS usage; a user-controlled deep check should be added later.
 
 Keep extending the existing Wi-Fi, voice, AI interaction, and glyph-coverage regressions when new behavior is added. Repeated boots should be tested against the same access point to quantify the first-attempt authentication failure rate.
 

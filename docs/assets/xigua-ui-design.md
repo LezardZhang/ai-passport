@@ -29,11 +29,12 @@ single-level and uses no hidden swipe or touch gesture. The password keyboard ex
 
 | Page | Purpose | Entry | Exit |
 | --- | --- | --- | --- |
-| Overview | AI assistant first, plus manual record, Today, Sleep, Sound, and Settings | Boot; long DOWN from a top-level page | OK opens focus; UP/DOWN changes focus |
+| Overview | AI assistant first, plus manual record, Today, Sleep, Sound, Wi-Fi, Settings, and Story | Boot; long DOWN from a top-level page | OK opens focus; UP/DOWN changes focus |
 | Feeding | Record time, amount, and ingredient/notes | OK on Feeding focus | OK edits; long DOWN back |
 | Diaper | Record pee/poop and occurrence time | OK on Diaper focus | UP/DOWN choose; OK saves |
 | Sleep | Background sleep session and duration | Overview Start sleep / End sleep card | OK toggles the session without entering a timer page |
-| AI assistant | One entry for JSON records, text answers, and TTS stories | OK on the first Overview focus | UP/DOWN choose ask/story; hold OK to talk; long DOWN back |
+| AI assistant | Voice Q&A and JSON records | OK on the first Overview focus | Hold OK to talk; long DOWN back |
+| Story | Dedicated voice story mode; a completed reply is spoken automatically | OK on the last Overview focus | Hold OK to talk; long DOWN back |
 | Songs/noise | Choose a playlist, volume, and playback state; streaming later | OK on Sound focus | UP/DOWN choose; OK play/pause |
 | Today | Paginated counts and recent records | OK on Today focus | Long DOWN back; UP/DOWN pages |
 | Settings | Display, sound, Wi-Fi, time, AI, device info, restart | OK on Settings focus | Long DOWN back; destructive actions confirm |
@@ -54,15 +55,16 @@ The 240×320 display has four fixed areas:
 4. A fixed two-line key hint: UP/DOWN selects, OK opens, hold UP records feeding.
 
 The focus order is AI assistant → Manual record → Today → Sleep → Sound →
-Wi-Fi → Settings. The three menu pages contain 3, 3, and 1 items; UP/DOWN wraps
+Wi-Fi → Settings → Story. The three menu pages contain 3, 3, and 2 items; UP/DOWN wraps
 between the first and last items. Selection moves on PRESS, so rapid repeated
 presses continue moving even when the driver subsequently reports DOUBLE.
 Menu cards share the AI preparation/action colors: dark blue background, cyan
 selection with dark text and a white outline. Cards exist only on the Overview
 page. The short undo window takes priority over opening ordinary menu items;
 the Sleep card always performs its displayed Start/End action.
-The AI assistant is the single top-level entry: the model can call local records through
-JSON, while text/TTS is reserved for content that needs a parent-facing response.
+The AI assistant and Story are separate top-level entries. The model can call local
+records through JSON; ordinary AI replies stay on screen, while Story replies are
+spoken automatically for the parent or child.
 Audio and network changes
 cannot silently move focus or change what OK means.
 
@@ -118,9 +120,9 @@ Saving enters a short `Saving` state. Success shows `Recorded 150 ml` and a
 five-second undo. Failure shows retry and back; the authoritative counters are
 not updated early.
 
-The AI assistant handles Q&A, records, and stories through one PTT, ASR, model, and
-TTS pipeline. The model must return either a structured command or a parent-facing
-reply.
+The AI assistant handles Q&A and records, while the separate Story page handles
+story prompts through the same PTT, ASR, model, and TTS building blocks. The model
+must return either a structured command or a parent-facing reply.
 
 The implemented AI UI separates preparation, recording, processing, reply reading,
 reply actions, and failure. Preparation has three highlighted cards: hold OK to
@@ -169,9 +171,11 @@ It saves NVS before replacing JSON with a device-generated success message and
 offering undo. Persistence failure restores the prior state and reports an error.
 Plain text never changes records. Settings, Wi-Fi, timers and audio playback are
 not exposed as voice commands. The older `reply_text` / `tts_text` response API
-remains for compatibility; the current model prompt returns plain text for
-questions and stories. TTS playback is not implemented. Songs and white noise
-use a bounded audio queue; HTTP chunks never go directly to I2S.
+remains for compatibility. Story mode uses the dedicated `mimo-v2.5-tts` stream,
+decodes each `delta.audio.data` Base64 chunk as 24 kHz 16-bit mono PCM, and sends
+it through the BSP audio worker path; ordinary AI replies remain text-only for now.
+Songs and white noise use a separate bounded audio queue; HTTP chunks never go
+directly to I2S.
 
 Today uses pages rather than a hidden scroll list. The summary page is followed
 by the active/recent sleep pages and recent feeding pages. Empty state still offers a
@@ -221,7 +225,8 @@ must be checked for baseline and line-height issues.
 
 Implement offline Feeding, Diaper, Sleep, Today, and Settings first with a
 bounded local event log. Add trusted time, Wi-Fi/AI configuration, Voice chat,
-Voice story, TTS, and finally server-streamed songs/noise in separate increments.
+the dedicated Voice story with TTS, and finally server-streamed songs/noise in
+separate increments.
 Report build, host tests, device tests, and unverified visual/font/power checks
 separately for every increment.
 

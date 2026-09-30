@@ -258,7 +258,7 @@ static const char *const ACTIVE_NAMES[] = {
     "", "睡眠", "洗澡", "趴玩", "计时"
 };
 static const char *const HOME_ITEMS[] = {
-    "AI助手", "手动记录", "今天", "睡眠", "声音", "Wi-Fi配网", "设置"
+    "AI助手", "手动记录", "今天", "睡眠", "声音", "Wi-Fi配网", "设置", "讲故事"
 };
 
 static bool valid_timer_minutes(uint16_t minutes)
@@ -1178,7 +1178,9 @@ static bool ai_request_voice_current_mode(void)
         snprintf(s_feedback, sizeof(s_feedback), "Wi-Fi未连接，请先完成配网");
         return false;
     }
-    if (xigua_ai_request_voice() != ESP_OK) {
+    esp_err_t request_err = s_page == X_PAGE_STORY ? xigua_ai_request_story() :
+                                                     xigua_ai_request_voice();
+    if (request_err != ESP_OK) {
         snprintf(s_feedback, sizeof(s_feedback), "录音启动失败");
         return false;
     }
@@ -1277,13 +1279,16 @@ static void ui_ai_render(void)
         s_ai_rendered_view = s_ai_ui.view;
     }
     char progress[160];
-    ui_set_title(s_ai_ui.view == X_AI_READING ? "AI回复" :
-                 s_ai_ui.view == X_AI_ACTIONS ? "回复操作" : "AI助手");
+    ui_set_title(s_ai_ui.view == X_AI_READING ? (s_page == X_PAGE_STORY ? "故事" : "AI回复") :
+                 s_ai_ui.view == X_AI_ACTIONS ? "回复操作" :
+                 (s_page == X_PAGE_STORY ? "讲故事" : "AI助手"));
     if (cards) {
         const char *const ready[] = { "长按确认说话", "查看上次回复", "返回" };
         const char *const actions[] = { "继续查看", "再问一次", "返回" };
         lv_label_set_text(s_ai_text, s_ai_ui.view == X_AI_READY ?
-                          "长按确认说话\n松开结束录音" : "请选择操作\n回复仍可查看");
+                          (s_page == X_PAGE_STORY ? "长按确认说话\n松开后自动讲故事" :
+                                                    "长按确认说话\n松开结束录音") :
+                          "请选择操作\n回复仍可查看");
         for (size_t i = 0; i < 3; ++i) {
             lv_obj_t *card = s_ai_cards[i];
             lv_label_set_text(card, s_ai_ui.view == X_AI_READY ? ready[i] : actions[i]);
@@ -1302,8 +1307,10 @@ static void ui_ai_render(void)
             snprintf(progress, sizeof(progress), "正在录音\n\n%u 秒 / 60 秒\n\n松开确认键结束", seconds);
             ui_set_hint("松开结束录音\n请直接说话");
         } else if (s_ai_ui.view == X_AI_WAITING) {
-            snprintf(progress, sizeof(progress), "%s\n\n请等待\n\n回复收到后可换页查看",
-                     xigua_ai_voice_phase() == XIGUA_AI_VOICE_THINKING ? "正在等待回复" : "正在识别语音");
+            const xigua_ai_voice_phase_t phase = xigua_ai_voice_phase();
+            const char *stage = phase == XIGUA_AI_VOICE_THINKING ? "正在等待回复" :
+                                phase == XIGUA_AI_VOICE_SPEAKING ? "正在播放故事" : "正在识别语音";
+            snprintf(progress, sizeof(progress), "%s\n\n请等待\n\n回复收到后可换页查看", stage);
             ui_set_hint("处理中  确认键无操作\n长按下键返回");
         } else {
             snprintf(progress, sizeof(progress), "请求未完成\n\n%s\n\n确认返回，重新录音\n%s",
@@ -1578,6 +1585,10 @@ static void ui_timer_cb(lv_timer_t *timer)
             s_ai_ui.view = X_AI_WAITING;
             snprintf(s_feedback, sizeof(s_feedback), "正在请求 Mimo");
             break;
+        case XIGUA_AI_VOICE_SPEAKING:
+            s_ai_ui.view = X_AI_WAITING;
+            snprintf(s_feedback, sizeof(s_feedback), "正在播放故事");
+            break;
         default:
             break;
         }
@@ -1585,14 +1596,17 @@ static void ui_timer_cb(lv_timer_t *timer)
     }
     esp_err_t ai_error = ESP_FAIL;
     bool truncated = false;
-    if (xigua_ai_take_text(s_ai_reply, sizeof(s_ai_reply), &ai_error, &truncated)) {
+    bool audio_failed = false;
+    if (xigua_ai_take_text(s_ai_reply, sizeof(s_ai_reply), &ai_error, &truncated,
+                           &audio_failed)) {
         s_ai_request_pending = false;
         if (ai_error == ESP_OK) {
             s_ai_truncated = truncated;
             s_ai_rendered_view = (x_ai_view_t)-1;
         } else snprintf(s_ai_error, sizeof(s_ai_error), "%s", esp_err_to_name(ai_error));
         x_ai_complete(&s_ai_ui, ai_error == ESP_OK);
-        snprintf(s_feedback, sizeof(s_feedback), ai_error == ESP_OK ? "Mimo 回复已收到" : "Mimo 请求失败");
+        snprintf(s_feedback, sizeof(s_feedback), ai_error != ESP_OK ? "Mimo 请求失败" :
+                 audio_failed ? "故事文字已收到，语音播放失败" : "Mimo 回复已收到");
         if (ai_error == ESP_OK && ui_take_voice_undo()) {
             snprintf(s_feedback, sizeof(s_feedback), "AI记录已保存");
         }
@@ -2046,7 +2060,7 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         }
     } else if (s_page == X_PAGE_OVERVIEW) {
         if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
-            const size_t count = 7;
+            const size_t count = sizeof(HOME_ITEMS) / sizeof(HOME_ITEMS[0]);
             s_focus = btn == BSP_BTN_UP ? (s_focus + count - 1) % count : (s_focus + 1) % count;
         } else if (btn == BSP_BTN_OK) {
             if (s_focus == 0) go_page(X_PAGE_VOICE, 0);
@@ -2060,7 +2074,8 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
                 (void)xigua_wifi_start();
                 wifi_ui_enter_menu();
                 go_page(X_PAGE_WIFI, 0);
-            } else go_page(X_PAGE_SETTINGS, 0);
+            } else if (s_focus == 6) go_page(X_PAGE_SETTINGS, 0);
+            else go_page(X_PAGE_STORY, 0);
             ui_sync();
             return;
         }
