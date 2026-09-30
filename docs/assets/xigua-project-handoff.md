@@ -103,6 +103,28 @@ PASS. The complete gate was attempted but the actionlint installer still rejects
 the Windows Git Bash platform. On-screen rendering and long replies remain
 pending physical acceptance; the existing 192-byte reply buffer is unchanged.
 
+## AI page interaction redesign (2026-09-30)
+
+The owner confirmed the full-font firmware's core behavior works, then reported
+that a short OK after a reply sent the canned service-check prompt and overwrote
+the useful result. The UI no longer exposes that text request. Preparation,
+recording, processing, paged reply reading, actions, and errors are separate
+states. Short OK opens actions with Continue selected; Ask again returns to
+preparation and requires a deliberate hold on the recording card. UP/DOWN press
+pages the reply immediately. Failed requests retain the previous successful
+reply. The buffer is now 1024 bytes with UTF-8-safe truncation and a partial-reply
+indicator. The reader and action widgets exist only on the AI page.
+
+Build and merged/archive verification PASS; app 5,762,928 bytes, factory free
+462,992 bytes. Full image SHA-256:
+`5cd1eaf5bdc2685149c90f2fc4783dbeadf9e139e9cea15d97845863fd40b30c`.
+Matching ELF SHA-256:
+`8df4d818bb02d9b171327fd500e5e9b7c14a4dc1cd5f7d2835c7515799aff40c`.
+Reply protection, recording transitions, paging bounds, UTF-8, NOR/WAV capture,
+full-font and new fixed-label coverage checks PASS. Repository checks PASS;
+the complete gate remains blocked by the Windows actionlint installer.
+Physical acceptance of the redesigned page is pending.
+
 ## Remaining work
 
 The font coverage is improved, but the text is still too small for comfortable use on the 240x320 display. The menu hierarchy, focus indication, back navigation, and bottom hint line need a deliberate redesign rather than more labels. Long model replies need scrolling or paging and UTF-8-safe truncation.

@@ -49,10 +49,11 @@ prefix so more text fits. Dynamic fallback glyphs in compact menus still need
 visual acceptance, because fallback metrics can differ from the primary font.
 
 The generated font object occupies 4,050,047 bytes of read-only data and no
-`.data`/`.bss`. The integrated application is 5,761,040 bytes in the existing
-6,225,920-byte factory partition, leaving 464,880 bytes. NVS and the 2 MiB
+`.data`/`.bss`. The integrated application is 5,762,928 bytes in the existing
+6,225,920-byte factory partition, leaving 462,992 bytes. NVS and the 2 MiB
 temporary voice partition retain their layout.
 
-The existing 192-byte reply buffer and absence of long-reply paging remain
-separate limitations. Check arbitrary model text, thin strokes at 2 bpp,
-clipping, and heap stability during voice/TLS use on the physical screen.
+The AI UI now pages replies in a clipped viewport, with a 1024-byte reply buffer
+and UTF-8-safe truncation. Longer replies are marked as partial. Check arbitrary
+model text, thin strokes at 2 bpp, clipping, and heap stability during voice/TLS
+use on the physical screen. See the [AI UI design](xigua-ui-design.md).

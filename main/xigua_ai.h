@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#define XIGUA_AI_REPLY_BYTES 1024
+
 typedef enum {
     XIGUA_AI_MODEL_CHAT = 0,
     XIGUA_AI_MODEL_CHAT_PRO,
@@ -46,4 +48,4 @@ xigua_ai_voice_phase_t xigua_ai_voice_phase(void);
 xigua_ai_health_t xigua_ai_health(void);
 
 /* Called from the LVGL task to collect a completed response. */
-bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error);
+bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error, bool *truncated);

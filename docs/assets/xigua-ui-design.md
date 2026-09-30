@@ -95,7 +95,22 @@ not updated early.
 
 The AI assistant handles Q&A, records, and stories through one PTT, ASR, model, and
 TTS pipeline. The model must return either a structured command or a parent-facing
-reply. For example:
+reply.
+
+The implemented AI UI separates preparation, recording, processing, reply reading,
+reply actions, and failure. Preparation has three highlighted cards: hold OK to
+speak, view the last reply, and return. Short OK never sends a canned prompt or
+starts recording. Only holding OK on the preparation recording card starts PTT;
+release ends capture. Processing ignores OK and retains the last successful reply.
+The reply fills a dedicated clipped viewport using the complete 20 px font.
+UP/DOWN press changes one page of five 38 px lines; focus, clicks, and double-clicks
+cannot send another request. OK opens reply actions with Continue selected by
+default; Ask again returns to preparation and still requires a deliberate hold.
+Failure shows the error separately and keeps the previous reply accessible.
+The reply buffer is 1024 bytes; truncation respects UTF-8 boundaries and is marked
+as a partial reply. The background service health check does not replace a reply.
+
+Example structured command:
 
 ```json
 {"actions":[{"action":"record_feeding","time":"15:20","amount_ml":150,"ingredient":"FORMULA"}]}

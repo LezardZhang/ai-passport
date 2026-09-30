@@ -5,6 +5,8 @@
 #include "xigua_wifi.h"
 #include "xigua_ai.h"
 #include "xigua_keyboard.h"
+#include "xigua_ai_ui.h"
+#include "xigua_text.h"
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -172,6 +174,10 @@ static lv_obj_t *s_body;
 static lv_obj_t *s_status;
 static lv_obj_t *s_hint;
 static lv_obj_t *s_battery;
+static lv_obj_t *s_ai_panel;
+static lv_obj_t *s_ai_text;
+static lv_obj_t *s_ai_cards[3];
+static x_ai_view_t s_ai_rendered_view = (x_ai_view_t)-1;
 static lv_timer_t *s_timer;
 
 static SemaphoreHandle_t s_mutex;
@@ -185,10 +191,13 @@ static size_t s_feed_ingredient;
 static size_t s_timer_focus;
 static bool s_confirm_abort;
 static bool s_abort_choice;
-static uint8_t s_ai_mode;
 static bool s_running;
 static char s_feedback[64];
-static char s_ai_reply[192];
+static char s_ai_reply[XIGUA_AI_REPLY_BYTES];
+static char s_ai_error[64];
+static bool s_ai_truncated;
+static x_ai_ui_t s_ai_ui = { .view = X_AI_READY, .pages = 1 };
+static int64_t s_ai_record_started_us;
 static bool s_ai_request_pending;
 static char s_last_command_id[X_COMMAND_ID_MAX];
 static x_undo_t s_undo;
@@ -875,29 +884,6 @@ static void wifi_ui_render_keyboard(void)
     }
 }
 
-static bool ai_request_current_mode(void)
-{
-    if (!xigua_ai_configured()) {
-        snprintf(s_feedback, sizeof(s_feedback), "AI 尚未配置");
-        return false;
-    }
-    if (s_ai_request_pending) {
-        snprintf(s_feedback, sizeof(s_feedback), "Mimo 请求进行中");
-        return false;
-    }
-
-    const char *prompt = s_ai_mode == 0 ?
-        "请用一句简短中文确认育儿 AI 服务已经连接。" :
-        "请用两句简短中文讲一个适合幼儿的睡前故事开头。";
-    if (xigua_ai_request_text(prompt) != ESP_OK) {
-        snprintf(s_feedback, sizeof(s_feedback), "Mimo 请求失败");
-        return false;
-    }
-    s_ai_request_pending = true;
-    snprintf(s_feedback, sizeof(s_feedback), "正在请求 Mimo");
-    return true;
-}
-
 static bool ai_request_voice_current_mode(void)
 {
     if (!xigua_ai_configured()) {
@@ -917,8 +903,90 @@ static bool ai_request_voice_current_mode(void)
         return false;
     }
     s_ai_request_pending = true;
+    s_ai_record_started_us = esp_timer_get_time();
     snprintf(s_feedback, sizeof(s_feedback), "正在录音，松开确认键结束（最长60秒）");
     return true;
+}
+
+static void ui_ai_render(void)
+{
+    if (!s_ai_panel) {
+        s_ai_panel = lv_obj_create(s_screen);
+        lv_obj_remove_style_all(s_ai_panel);
+        lv_obj_remove_flag(s_ai_panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_pos(s_ai_panel, 18, 54);
+        lv_obj_set_size(s_ai_panel, 204, 190);
+        s_ai_rendered_view = (x_ai_view_t)-1;
+    }
+    lv_obj_add_flag(s_body, LV_OBJ_FLAG_HIDDEN);
+    bool cards = s_ai_ui.view == X_AI_READY || s_ai_ui.view == X_AI_ACTIONS;
+    if (s_ai_rendered_view != s_ai_ui.view) {
+        lv_obj_clean(s_ai_panel);
+        memset(s_ai_cards, 0, sizeof(s_ai_cards));
+        s_ai_text = make_label(s_ai_panel, 0, 0, 204, cards ? 46 : LV_SIZE_CONTENT,
+                              "", 0xFFFFFF, cards ? 16 : 20);
+        if (s_ai_ui.view == X_AI_READING) {
+            lv_obj_set_style_text_font(s_ai_text, &xigua_font_full20, 0);
+            lv_obj_set_style_text_line_space(s_ai_text, 0, 0);
+            lv_label_set_text(s_ai_text, s_ai_reply);
+            lv_point_t size;
+            lv_text_get_size(&size, s_ai_reply, &xigua_font_full20, 0, 0, 204, LV_TEXT_FLAG_NONE);
+            s_ai_ui.pages = x_ai_page_count((size_t)size.y, 190);
+            if (s_ai_ui.page >= s_ai_ui.pages) s_ai_ui.page = s_ai_ui.pages - 1;
+        }
+        if (cards) {
+            for (size_t i = 0; i < 3; ++i) {
+                s_ai_cards[i] = make_label(s_ai_panel, 0, 54 + (int)i * 44,
+                                           204, 38, "", 0xFFFFFF, 20);
+                lv_obj_set_style_pad_left(s_ai_cards[i], 10, 0);
+                lv_obj_set_style_pad_top(s_ai_cards[i], 6, 0);
+                lv_obj_set_style_bg_opa(s_ai_cards[i], LV_OPA_COVER, 0);
+                lv_obj_set_style_radius(s_ai_cards[i], 6, 0);
+            }
+        }
+        s_ai_rendered_view = s_ai_ui.view;
+    }
+    char progress[160];
+    ui_set_title(s_ai_ui.view == X_AI_READING ? "AI回复" :
+                 s_ai_ui.view == X_AI_ACTIONS ? "回复操作" : "AI助手");
+    if (cards) {
+        const char *const ready[] = { "长按确认说话", "查看上次回复", "返回" };
+        const char *const actions[] = { "继续查看", "再问一次", "返回" };
+        lv_label_set_text(s_ai_text, s_ai_ui.view == X_AI_READY ?
+                          "长按确认说话\n松开结束录音" : "请选择操作\n回复仍可查看");
+        for (size_t i = 0; i < 3; ++i) {
+            lv_obj_t *card = s_ai_cards[i];
+            bool selected = i == s_ai_ui.focus;
+            lv_label_set_text(card, s_ai_ui.view == X_AI_READY ? ready[i] : actions[i]);
+            lv_obj_set_style_bg_color(card, lv_color_hex(selected ? 0x69D2E7 : 0x23405A), 0);
+            lv_obj_set_style_text_color(card, lv_color_hex(selected ? 0x102332 : 0xFFFFFF), 0);
+            lv_obj_set_style_outline_width(card, selected ? 2 : 0, 0);
+            lv_obj_set_style_outline_color(card, lv_color_hex(0xFFFFFF), 0);
+        }
+        lv_label_set_text(s_status, s_ai_ui.view == X_AI_ACTIONS ? "回复仍可查看" : s_feedback);
+        ui_set_hint("上/下选择  确认打开\n长按下键返回");
+    } else if (s_ai_ui.view == X_AI_READING) {
+        lv_obj_set_y(s_ai_text, -(int32_t)(s_ai_ui.page * 190));
+        lv_label_set_text_fmt(s_status, "%s %u / %u", s_ai_truncated ? "部分回复" : "回复",
+                              (unsigned)s_ai_ui.page + 1, (unsigned)s_ai_ui.pages);
+        ui_set_hint("上/下换页  确认打开操作\n长按下键返回");
+    } else {
+        if (s_ai_ui.view == X_AI_RECORDING) {
+            unsigned seconds = (unsigned)((esp_timer_get_time() - s_ai_record_started_us) / 1000000);
+            snprintf(progress, sizeof(progress), "正在录音\n\n%u 秒 / 60 秒\n\n松开确认键结束", seconds);
+            ui_set_hint("松开结束录音\n请直接说话");
+        } else if (s_ai_ui.view == X_AI_WAITING) {
+            snprintf(progress, sizeof(progress), "%s\n\n请等待\n\n回复收到后可换页查看",
+                     xigua_ai_voice_phase() == XIGUA_AI_VOICE_THINKING ? "正在等待回复" : "正在识别语音");
+            ui_set_hint("处理中  确认键无操作\n长按下键返回");
+        } else {
+            snprintf(progress, sizeof(progress), "请求未完成\n\n%s\n\n确认返回，重新录音\n%s",
+                     s_ai_error, s_ai_ui.has_reply ? "上次回复可查看" : "请重试");
+            ui_set_hint("确认返回准备页\n长按下键返回");
+        }
+        lv_label_set_text(s_ai_text, progress);
+        lv_label_set_text(s_status, "");
+    }
 }
 
 static void ui_refresh_page(void)
@@ -1004,17 +1072,8 @@ static void ui_refresh_page(void)
         ui_set_hint("上键上一个  下键下一个  确认键开始  长按下键返回");
         break;
     case X_PAGE_VOICE:
-        ui_set_title("AI助手");
-        if (s_ai_reply[0]) snprintf(text, sizeof(text), "%s", s_ai_reply);
-        else snprintf(text, sizeof(text), "%s\n\n长按确认键说话\n可记录喂养、尿便、睡眠等事项",
-                      s_ai_mode == 0 ? "问答/记录" : "讲故事/语音");
-        ui_set_hint("上/下切换模式  确认键文字请求  长按后松开结束录音");
-        break;
     case X_PAGE_STORY:
-        ui_set_title("讲故事");
-        if (s_ai_reply[0]) snprintf(text, sizeof(text), "%s", s_ai_reply);
-        else snprintf(text, sizeof(text), "故事模式\n\n长按确认键说话\n回复将显示在此处");
-        ui_set_hint("长按确认说话  松开结束录音  长按下键返回");
+        text[0] = '\0';
         break;
     case X_PAGE_SOUND:
         ui_set_title("儿歌/白噪音");
@@ -1116,13 +1175,17 @@ static void ui_refresh_page(void)
         lv_obj_remove_flag(s_status, LV_OBJ_FLAG_HIDDEN);
     }
     ui_set_body_font(s_page == X_PAGE_WIFI ? 16 : 20);
-    /* Arbitrary model text must use the complete font as the primary face. */
-    if (s_ai_reply[0] && (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY)) {
-        lv_obj_set_style_text_font(s_body, &xigua_font_full20, LV_PART_MAIN);
-    }
+    lv_obj_remove_flag(s_body, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(s_body, text);
     if (snapshot.battery_soc >= 0) lv_label_set_text_fmt(s_battery, "%d%%", snapshot.battery_soc);
     if (s_status) lv_label_set_text(s_status, s_feedback);
+    if (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) ui_ai_render();
+    else if (s_ai_panel) {
+        lv_obj_delete(s_ai_panel);
+        s_ai_panel = s_ai_text = NULL;
+        memset(s_ai_cards, 0, sizeof(s_ai_cards));
+        s_ai_rendered_view = (x_ai_view_t)-1;
+    }
 }
 
 static void ui_timer_cb(lv_timer_t *timer)
@@ -1142,9 +1205,11 @@ static void ui_timer_cb(lv_timer_t *timer)
             snprintf(s_feedback, sizeof(s_feedback), "正在录音，松开确认键结束（最长60秒）");
             break;
         case XIGUA_AI_VOICE_TRANSCRIBING:
+            s_ai_ui.view = X_AI_WAITING;
             snprintf(s_feedback, sizeof(s_feedback), "正在识别语音");
             break;
         case XIGUA_AI_VOICE_THINKING:
+            s_ai_ui.view = X_AI_WAITING;
             snprintf(s_feedback, sizeof(s_feedback), "正在请求 Mimo");
             break;
         default:
@@ -1152,12 +1217,16 @@ static void ui_timer_cb(lv_timer_t *timer)
         }
         ui_refresh_page();
     }
-    char ai_text[192];
+    static char ai_text[XIGUA_AI_REPLY_BYTES];
     esp_err_t ai_error = ESP_FAIL;
-    if (xigua_ai_take_text(ai_text, sizeof(ai_text), &ai_error)) {
+    bool truncated = false;
+    if (xigua_ai_take_text(ai_text, sizeof(ai_text), &ai_error, &truncated)) {
         s_ai_request_pending = false;
-        if (ai_error == ESP_OK) snprintf(s_ai_reply, sizeof(s_ai_reply), "%s", ai_text);
-        else snprintf(s_ai_reply, sizeof(s_ai_reply), "Mimo 请求失败：%s", esp_err_to_name(ai_error));
+        if (ai_error == ESP_OK) {
+            s_ai_truncated = xigua_text_copy(s_ai_reply, sizeof(s_ai_reply), ai_text) || truncated;
+            s_ai_rendered_view = (x_ai_view_t)-1;
+        } else snprintf(s_ai_error, sizeof(s_ai_error), "%s", esp_err_to_name(ai_error));
+        x_ai_complete(&s_ai_ui, ai_error == ESP_OK);
         snprintf(s_feedback, sizeof(s_feedback), ai_error == ESP_OK ? "Mimo 回复已收到" : "Mimo 请求失败");
         if (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) ui_refresh_page();
     }
@@ -1298,6 +1367,9 @@ void xigua_app_exit(void)
     }
     s_title = s_body = s_status = s_hint = s_battery = NULL;
     s_wifi_keyboard = s_wifi_password = NULL;
+    s_ai_panel = s_ai_text = NULL;
+    memset(s_ai_cards, 0, sizeof(s_ai_cards));
+    s_ai_rendered_view = (x_ai_view_t)-1;
     memset(s_wifi_key_labels, 0, sizeof(s_wifi_key_labels));
 }
 
@@ -1401,7 +1473,9 @@ esp_err_t xigua_app_ai_response(const char *json)
     cJSON *reply = cJSON_GetObjectItemCaseSensitive(root, "reply_text");
     if (!cJSON_IsString(reply)) reply = cJSON_GetObjectItemCaseSensitive(root, "tts_text");
     if (cJSON_IsString(reply) && reply->valuestring) {
-        snprintf(s_ai_reply, sizeof(s_ai_reply), "%s", reply->valuestring);
+        s_ai_truncated = xigua_text_copy(s_ai_reply, sizeof(s_ai_reply), reply->valuestring);
+        x_ai_complete(&s_ai_ui, true);
+        s_ai_rendered_view = (x_ai_view_t)-1;
         snprintf(s_feedback, sizeof(s_feedback), "%s", cJSON_IsString(
             cJSON_GetObjectItemCaseSensitive(root, "reply_text")) ? "文字回复已准备" : "语音回复已准备");
         replied = true;
@@ -1423,12 +1497,26 @@ esp_err_t xigua_app_ai_response(const char *json)
 void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
     if (!s_running) return;
-    if (ev == BSP_BTN_RELEASE && btn == BSP_BTN_OK &&
-        (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) &&
-        s_ai_request_pending && xigua_ai_voice_phase() == XIGUA_AI_VOICE_RECORDING) {
-        xigua_ai_stop_voice();
-        snprintf(s_feedback, sizeof(s_feedback), "录音结束，正在识别");
-        ui_sync();
+    if (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) {
+        x_ai_input_t input;
+        if (ev == BSP_BTN_PRESS && btn == BSP_BTN_UP) input = X_AI_UP;
+        else if (ev == BSP_BTN_PRESS && btn == BSP_BTN_DOWN) input = X_AI_DOWN;
+        else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) input = X_AI_OK;
+        else if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) input = X_AI_HOLD_OK;
+        else if (ev == BSP_BTN_RELEASE && btn == BSP_BTN_OK) input = X_AI_RELEASE_OK;
+        else if (ev == BSP_BTN_LONG && btn == BSP_BTN_DOWN) input = X_AI_BACK;
+        else return;
+        if (!bsp_lvgl_lock(100)) return;
+        x_ai_effect_t effect = x_ai_input(&s_ai_ui, input);
+        if (effect == X_AI_START_VOICE && !ai_request_voice_current_mode()) {
+            snprintf(s_ai_error, sizeof(s_ai_error), "%s", s_feedback);
+            x_ai_complete(&s_ai_ui, false);
+        } else if (effect == X_AI_STOP_VOICE) xigua_ai_stop_voice();
+        else if (effect == X_AI_HOME) go_page(X_PAGE_OVERVIEW, 0);
+        if (input == X_AI_OK && s_ai_ui.view == X_AI_READY && s_ai_ui.focus == 1 &&
+            !s_ai_ui.has_reply) snprintf(s_feedback, sizeof(s_feedback), "暂无回复");
+        ui_refresh_page();
+        bsp_lvgl_unlock();
         return;
     }
     if (ev == BSP_BTN_LONG) {
@@ -1466,9 +1554,6 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
                 if (s_page == X_PAGE_ACTIVE && !s_confirm_abort) {
                     s_confirm_abort = true;
                     s_abort_choice = false;
-                    ui_refresh_page();
-                } else if (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) {
-                    (void)ai_request_voice_current_mode();
                     ui_refresh_page();
                 } else {
                     snprintf(s_feedback, sizeof(s_feedback), "语音服务等待接入");
@@ -1591,14 +1676,6 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     } else if (s_page == X_PAGE_TODAY) {
         if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
             // The first version is a single summary page; retain the buttons as a no-op.
-        }
-    } else if (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) {
-        if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
-            s_ai_mode = s_ai_mode == 0 ? 1 : 0;
-            snprintf(s_feedback, sizeof(s_feedback), "已切换到%s模式",
-                     s_ai_mode == 0 ? "问答" : "故事");
-        } else if (btn == BSP_BTN_OK) {
-            (void)ai_request_current_mode();
         }
     } else if (s_page == X_PAGE_SOUND) {
         if (btn == BSP_BTN_UP) s_focus = (s_focus + 2) % 3;

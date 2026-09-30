@@ -35,6 +35,9 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_xigua_keyboard.c -o "${test_dir}/test_xigua_keyboard"
     "${test_dir}/test_xigua_keyboard"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_xigua_ai_ui.c -o "${test_dir}/test_xigua_ai_ui"
+    "${test_dir}/test_xigua_ai_ui"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Itests/xigua_stubs -Imain \
         tests/test_xigua_wifi.c -o "${test_dir}/test_xigua_wifi"
     "${test_dir}/test_xigua_wifi"

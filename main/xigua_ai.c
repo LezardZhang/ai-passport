@@ -1,4 +1,5 @@
 #include "xigua_ai.h"
+#include "xigua_text.h"
 #include "xigua_wifi.h"
 
 #include "bsp_audio.h"
@@ -104,7 +105,8 @@ typedef struct {
 
 typedef struct {
     esp_err_t error;
-    char text[XIGUA_AI_RESPONSE_MAX];
+    bool truncated;
+    char text[XIGUA_AI_REPLY_BYTES];
 } xigua_ai_result_t;
 
 typedef struct {
@@ -133,6 +135,7 @@ static TaskHandle_t s_task;
 static volatile xigua_ai_voice_phase_t s_voice_phase;
 static volatile bool s_voice_stop;
 static volatile xigua_ai_health_t s_health = XIGUA_AI_HEALTH_OFFLINE;
+static bool s_response_truncated;
 
 #define XIGUA_AI_HEALTH_SUCCESS_INTERVAL_US (6LL * 60 * 60 * 1000000)
 #define XIGUA_AI_HEALTH_RETRY_INTERVAL_US (2LL * 60 * 1000000)
@@ -180,6 +183,7 @@ static esp_err_t post_json(const char *payload, char *response, size_t response_
                            size_t body_capacity)
 {
     if (!payload || !response || response_size == 0) return ESP_ERR_INVALID_ARG;
+    s_response_truncated = false;
     ESP_LOGI(TAG, "MiMo request bytes=%u free=%u largest=%u",
              (unsigned)strlen(payload),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
@@ -241,7 +245,7 @@ static esp_err_t post_json(const char *payload, char *response, size_t response_
         if (!cJSON_IsString(content) || !content->valuestring) {
             err = ESP_ERR_INVALID_RESPONSE;
         } else {
-            snprintf(response, response_size, "%s", content->valuestring);
+            s_response_truncated = xigua_text_copy(response, response_size, content->valuestring);
         }
         cJSON_Delete(root);
     }
@@ -559,7 +563,7 @@ static esp_err_t asr_stream(size_t wav_bytes, char *transcript, size_t transcrip
         if (cJSON_IsArray(content)) content = cJSON_GetArrayItem(content, 0);
         cJSON *text = content && cJSON_IsObject(content) ? cJSON_GetObjectItem(content, "text") : content;
         if (!cJSON_IsString(text) || !text->valuestring) err = ESP_ERR_INVALID_RESPONSE;
-        else snprintf(transcript, transcript_size, "%s", text->valuestring);
+        else xigua_text_copy(transcript, transcript_size, text->valuestring);
         cJSON_Delete(root);
     }
     if (client) { esp_http_client_close(client); esp_http_client_cleanup(client); }
@@ -629,6 +633,7 @@ static void ai_task(void *arg)
         } else {
             result.error = request_once(request.prompt, result.text, sizeof(result.text));
         }
+        result.truncated = s_response_truncated;
         xQueueOverwrite(s_results, &result);
     }
 }
@@ -705,13 +710,16 @@ xigua_ai_health_t xigua_ai_health(void)
     return s_health;
 }
 
-bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error)
+bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error, bool *truncated)
 {
     if (!s_results || !text || text_size == 0) return false;
     xigua_ai_result_t result;
     if (xQueueReceive(s_results, &result, 0) != pdTRUE) return false;
     if (error) *error = result.error;
-    if (result.error == ESP_OK) snprintf(text, text_size, "%s", result.text);
+    if (result.error == ESP_OK) {
+        bool clipped = xigua_text_copy(text, text_size, result.text);
+        if (truncated) *truncated = result.truncated || clipped;
+    }
     else text[0] = '\0';
     return true;
 }
