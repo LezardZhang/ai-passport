@@ -195,6 +195,11 @@ produce one-action JSON; questions and missing information produce prose.
 The worker strictly validates JSON and saves NVS before showing a local success
 message. Failed persistence restores the previous state. Invalid, truncated or
 multiple commands never become records. Manual and voice sleep share this path.
+Feeding events already had an epoch in the local event ring; this increment makes
+that time visible end to end. Voice and manual feeding confirmations show the
+recorded date/time, and Today has pages for recent feeding records with time,
+amount and ingredient. Only trusted wall-clock time is displayed; unknown time
+is labeled instead of guessed.
 
 Overview now has Start sleep / End sleep as one top-level toggle. Sleep continues
 while using other pages, recording feeding, or running the independent timer.
@@ -255,3 +260,11 @@ Keep extending the existing Wi-Fi, voice, AI interaction, and glyph-coverage reg
 ## Handoff steps
 
 Read `AGENTS.md`, the five required passport skills, the Wi-Fi provisioning guide, and this document before changing the firmware. This private repository may use the owner-authorized tracked Wi-Fi and MiMo configuration; do not print those values in logs or handoff text. Run `./tools/validate.sh --static`, `./tools/validate.sh --firmware`, and the complete gate before delivery. For a device run, capture serial logs from boot through IP acquisition, health check, and voice request; save a Git checkpoint and verify the matching archive before flashing. Use its component images at the recorded offsets to preserve NVS and recording data under the standing flash authorization.
+
+## Cloud childcare backend (2026-09-30)
+
+The repository now contains a Docker-deployable backend under `backend/`. It stores the firmware's feeding, diaper, sleep, bath, tummy, and timer events in SQLite. Each event has an `occurred_at` timestamp, so feeding records preserve the exact time point as well as amount and ingredient. Retries are idempotent using the device event id.
+
+The service includes a browser management console at `/admin`, device upload and playback-reporting endpoints, child summaries and event queries, an audio catalogue for songs/stories/white noise, and a stable `/v1/hermes/children/{child_id}/analysis-input` export. Hermes has a separate token and can upload bounded audio files and add catalogue metadata, but cannot write childcare events. Device, admin, Hermes, and public-read credentials are separate environment variables. `backend/docker-compose.yml` persists the database and media in a named Docker volume.
+
+Backend host tests pass (`python -m pytest -q backend/tests/test_api.py`, 4 tests). Docker image build and Tencent Cloud deployment are not run on this Windows host because Docker is unavailable and the Edge Tencent Cloud session was not exposed to the automation bridge; server address, domain, HTTPS proxy, and final environment values remain deployment inputs.

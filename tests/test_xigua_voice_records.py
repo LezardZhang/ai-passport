@@ -184,6 +184,11 @@ int main(void) {
     reset(); assert(run(0, false) == ESP_OK);
     assert(s_state.data.milk_count == 1 && disk.milk_ml == 150 && disk.milk_ingredient == 0);
     assert(s_state.data.event_count == 1 && s_voice_undo.valid);
+    assert(s_state.data.last_milk_epoch == 1700000000 && disk.events[0].epoch == 1700000000);
+    assert(feed_record_slot(&disk, 0) == 0 && feed_record_count(&disk) == 1);
+    char feed_detail[128];
+    format_feed_record(&s_state, 0, feed_detail, sizeof(feed_detail));
+    assert(strstr(feed_detail, "时间 ") && strstr(feed_detail, "150") && strstr(feed_detail, "奶粉"));
     for (size_t i = 1; i <= 5; ++i) {
         reset(); assert(run(i, false) != ESP_OK);
         assert(commits == 0 && s_state.data.event_count == 0 && !s_voice_undo.valid);
@@ -270,7 +275,9 @@ def main():
     food = re.search(r"static const char \*const FEED_INGREDIENTS\[\] = .*?;", source).group(0)
     functions = []
     for name in ("state_save_locked", "append_event_locked", "append_sleep_event_locked",
-                 "json_event_time", "ingredient_from_json", "format_sleep_time", "sleep_record_slot",
+                 "json_event_time", "ingredient_from_json", "format_sleep_time", "event_is_today",
+                 "sleep_record_slot",
+                 "feed_record_slot", "feed_record_count", "format_feed_record",
                  "sleep_page_count", "format_sleep_record", "load_sleep_times",
                  "json_number_in_range", "apply_sleep_action_locked", "apply_ai_action_locked",
                  "xigua_app_process_ai_reply"):

@@ -88,7 +88,10 @@ treated as recording completion.
 ## 5. Page behavior
 
 The feeding editor shows the amount in a large font and repeats
-`▲ -10 ml  ▼ +10 ml  ● Save` at the bottom. Time is taken from the trusted clock;
+`▲ -10 ml  ▼ +10 ml  ● Save` at the bottom. Saving captures the exact event
+timestamp in the same local event ring used by voice records. The confirmation
+shows the recorded date and time, and Today pages show the newest feeding
+records with time, amount, and ingredient. Time is taken from the trusted clock;
 ingredients start as fixed choices and free notes arrive through voice. Values
 outside 10–400 ml require manual review instead of silent clamping.
 
@@ -170,7 +173,8 @@ remains for compatibility; the current model prompt returns plain text for
 questions and stories. TTS playback is not implemented. Songs and white noise
 use a bounded audio queue; HTTP chunks never go directly to I2S.
 
-Today uses pages rather than a hidden scroll list. Empty state still offers a
+Today uses pages rather than a hidden scroll list. The summary page is followed
+by the active/recent sleep pages and recent feeding pages. Empty state still offers a
 return path and Quick record. Sound playback belongs to an audio worker and is
 stopped or handed over before page deletion. Wi-Fi and AI pages show configured
 status and masked identifiers. Wi-Fi scans on startup, checks all scan results,
