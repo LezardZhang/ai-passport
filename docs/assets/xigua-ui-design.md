@@ -25,7 +25,7 @@ event with one hand while keeping the meaning of the next press obvious.
 ## 2. Page map
 
 Boot goes directly to Overview instead of the hardware-test menu. Navigation is
-single-level and uses no hidden swipe, touch, or double-click gesture.
+single-level and uses no hidden swipe or touch gesture. The password keyboard explicitly shows double UP/DOWN as row navigation.
 
 | Page | Purpose | Entry | Exit |
 | --- | --- | --- | --- |
@@ -37,7 +37,7 @@ single-level and uses no hidden swipe, touch, or double-click gesture.
 | Songs/noise | Choose a playlist, volume, and playback state; streaming later | OK on Sound focus | UP/DOWN choose; OK play/pause |
 | Today | Paginated counts and recent records | OK on Today focus | Long DOWN back; UP/DOWN pages |
 | Settings | Display, sound, Wi-Fi, time, AI, device info, restart | OK on Settings focus | Long DOWN back; destructive actions confirm |
-| Wi-Fi/time/AI | Show state and test results; auto-connect known local networks, enter a network manually when none is found, or use BLUFI | Settings item | UP/DOWN choose; OK advances; long OK completes text; long DOWN back |
+| Wi-Fi/time/AI | Show state and test results; auto-connect known networks, scan/select an SSID, and enter its password | Settings item | UP/DOWN choose; OK advances; long OK completes text; long DOWN back |
 | Result/error bar | Show saving, success, failure, retry, and undo | After any write or test | Timeout returns; OK undoes or retries |
 
 Only the current page, its snapshot, and short strings stay allocated. Producers,
@@ -112,13 +112,21 @@ chunks are never passed directly to I2S.
 Today uses pages rather than a hidden scroll list. Empty state still offers a
 return path and Quick record. Sound playback belongs to an audio worker and is
 stopped or handed over before page deletion. Wi-Fi and AI pages show configured
-status and masked identifiers. Wi-Fi scans on startup and first tries the last successfully connected network,
-then visible device-local preset networks in order. If none is visible, the page
-offers manual entry or BLUFI provisioning; preset passwords are compiled locally
-and never displayed. Manual entry shows uppercase, lowercase, and a combined
-number/symbol keyboard page, plus bottom-row actions for switching pages,
-backspace, and confirm. UP/DOWN moves the keyboard focus, OK selects a key, long
-OK finishes a field, and long DOWN cancels. Password text is masked while editing.
+status and masked identifiers. Wi-Fi scans on startup, checks all scan results,
+tries the three visible built-in networks first, then the saved network. Connection
+failures include three retries for association expiry; automatic mode scans again
+after 15 seconds if candidates are exhausted. Manual search takes control of the
+radio flow. Bluetooth provisioning and manual SSID entry are removed.
+
+The password keyboard has six columns and up to five character rows. Uppercase
+and lowercase each show all 26 letters on one page; digits/symbols use two pages.
+Type switches and Backspace/Next page/Done remain visible in two fixed bottom rows.
+The selected key has a cyan fill, dark text, and white outline. Every UP/DOWN press
+moves immediately; double UP/DOWN moves one row from the gesture's starting key.
+Three or more rapid presses still move the cursor. OK selects, long UP deletes,
+long OK finishes, and long DOWN cancels. Passwords are masked. Keyboard widgets
+are created only during editing and released on exit to preserve TLS heap.
+Wi-Fi and MiMo presets use the owner's authorized tracked configuration.
 
 Every page shows its current UP/DOWN/OK action in the bottom bar. There is no
 first-use tutorial; the operation hint is always available where the action

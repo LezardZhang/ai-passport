@@ -4,6 +4,7 @@
 #include "bsp_display.h"
 #include "xigua_wifi.h"
 #include "xigua_ai.h"
+#include "xigua_keyboard.h"
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -197,6 +198,11 @@ static char s_wifi_input_password[65];
 static size_t s_wifi_input_len;
 static x_wifi_keyboard_mode_t s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
 static size_t s_wifi_keyboard_index;
+static size_t s_wifi_keyboard_page;
+static xigua_keyboard_input_t s_wifi_nav;
+static lv_obj_t *s_wifi_keyboard;
+static lv_obj_t *s_wifi_password;
+static lv_obj_t *s_wifi_key_labels[XIGUA_KEYBOARD_PAGE_KEYS + XIGUA_KEYBOARD_ACTIONS];
 static size_t s_wifi_scan_index;
 
 static const char *const WIFI_KEYBOARD_CHARS[] = {
@@ -205,7 +211,7 @@ static const char *const WIFI_KEYBOARD_CHARS[] = {
     "0123456789 !@#$%^&*()-_=+[]{};:'\\\",.<>/?\\|`~",
 };
 static const char *const WIFI_KEYBOARD_ACTIONS[] = {
-    "大写", "小写", "数字", "退格", "完成",
+    "大写", "小写", "数字", "退格", "换页", "完成",
 };
 
 static const uint16_t TIMER_OPTIONS[] = { 5, 10, 20, 30 };
@@ -599,6 +605,7 @@ static void wifi_ui_clear_input(void)
     s_wifi_input_len = 0;
     s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
     s_wifi_keyboard_index = 0;
+    s_wifi_keyboard_page = 0;
     s_wifi_scan_index = 0;
 }
 
@@ -615,6 +622,8 @@ static void wifi_ui_begin_password(void)
     s_wifi_input_len = 0;
     s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
     s_wifi_keyboard_index = 0;
+    s_wifi_keyboard_page = 0;
+    memset(&s_wifi_nav, 0, sizeof(s_wifi_nav));
     memset(s_wifi_input_password, 0, sizeof(s_wifi_input_password));
 }
 
@@ -645,21 +654,6 @@ static void wifi_ui_select_scan(void)
 static const char *wifi_keyboard_chars(void)
 {
     return WIFI_KEYBOARD_CHARS[s_wifi_keyboard_mode];
-}
-
-static size_t wifi_keyboard_item_count(void)
-{
-    return strlen(wifi_keyboard_chars()) + sizeof(WIFI_KEYBOARD_ACTIONS) /
-        sizeof(WIFI_KEYBOARD_ACTIONS[0]);
-}
-
-static void wifi_ui_move_key(int delta)
-{
-    int next = (int)s_wifi_keyboard_index + delta;
-    int count = (int)wifi_keyboard_item_count();
-    if (next < 0) next = count - 1;
-    if (next >= count) next = 0;
-    s_wifi_keyboard_index = (size_t)next;
 }
 
 static void wifi_ui_append_char(char value)
@@ -697,6 +691,7 @@ static void wifi_ui_finish_edit(void)
 
 static void wifi_ui_choose_key(void)
 {
+    memset(&s_wifi_nav, 0, sizeof(s_wifi_nav));
     const char *chars = wifi_keyboard_chars();
     size_t char_count = strlen(chars);
     if (s_wifi_keyboard_index < char_count) {
@@ -708,19 +703,27 @@ static void wifi_ui_choose_key(void)
     case 0:
         s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
         s_wifi_keyboard_index = 0;
+        s_wifi_keyboard_page = 0;
         break;
     case 1:
         s_wifi_keyboard_mode = X_WIFI_KEY_LOWER;
         s_wifi_keyboard_index = 0;
+        s_wifi_keyboard_page = 0;
         break;
     case 2:
         s_wifi_keyboard_mode = X_WIFI_KEY_DIGIT_SYMBOL;
         s_wifi_keyboard_index = 0;
+        s_wifi_keyboard_page = 0;
         break;
     case 3:
         wifi_ui_backspace();
         break;
     case 4:
+        s_wifi_keyboard_page = (s_wifi_keyboard_page + 1) %
+            xigua_keyboard_page_count(char_count);
+        s_wifi_keyboard_index = s_wifi_keyboard_page * XIGUA_KEYBOARD_PAGE_KEYS;
+        break;
+    case 5:
         wifi_ui_finish_edit();
         break;
     default:
@@ -805,6 +808,71 @@ static void ui_set_body_font(uint16_t size)
     lv_obj_set_style_text_font(s_body,
                                s_xigua_font_ready ? font : &xigua_font_zh16,
                                LV_PART_MAIN);
+}
+
+static void wifi_ui_create_keyboard(void)
+{
+    s_wifi_keyboard = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(s_wifi_keyboard);
+    lv_obj_remove_flag(s_wifi_keyboard, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_pos(s_wifi_keyboard, 18, 78);
+    lv_obj_set_size(s_wifi_keyboard, 204, 190);
+    s_wifi_password = make_label(s_wifi_keyboard, 0, 0, 204, 22, "", 0xFFFFFF, 16);
+    for (size_t i = 0; i < XIGUA_KEYBOARD_PAGE_KEYS + XIGUA_KEYBOARD_ACTIONS; ++i) {
+        bool action = i >= XIGUA_KEYBOARD_PAGE_KEYS;
+        size_t slot = action ? i - XIGUA_KEYBOARD_PAGE_KEYS : i;
+        int x = action ? (int)(slot % 3) * 68 : (int)(slot % 6) * 34;
+        int y = action ? 136 + (int)(slot / 3) * 26 : 24 + (int)(slot / 6) * 22;
+        lv_obj_t *key = make_label(s_wifi_keyboard, x, y, action ? 64 : 30,
+                                   action ? 24 : 20, "", 0xFFFFFF, 16);
+        lv_obj_set_style_text_align(key, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_pad_top(key, 1, 0);
+        lv_obj_set_style_bg_opa(key, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(key, 4, 0);
+        s_wifi_key_labels[i] = key;
+    }
+    lv_obj_add_flag(s_wifi_keyboard, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void wifi_ui_render_keyboard(void)
+{
+    const char *characters = wifi_keyboard_chars();
+    size_t count = strlen(characters);
+    size_t start = s_wifi_keyboard_page * XIGUA_KEYBOARD_PAGE_KEYS;
+    char masked[7] = {0};
+    size_t shown = s_wifi_input_len > 6 ? 6 : s_wifi_input_len;
+    memset(masked, '*', shown);
+    lv_label_set_text_fmt(s_wifi_password, "密码：%s  %u/64  %u/%u",
+                          shown ? masked : "(空)", (unsigned)s_wifi_input_len,
+                          (unsigned)s_wifi_keyboard_page + 1,
+                          (unsigned)xigua_keyboard_page_count(count));
+    for (size_t i = 0; i < XIGUA_KEYBOARD_PAGE_KEYS + XIGUA_KEYBOARD_ACTIONS; ++i) {
+        lv_obj_t *key = s_wifi_key_labels[i];
+        size_t index = i < XIGUA_KEYBOARD_PAGE_KEYS ? start + i :
+            count + i - XIGUA_KEYBOARD_PAGE_KEYS;
+        if (i < XIGUA_KEYBOARD_PAGE_KEYS && index >= count) {
+            lv_obj_add_flag(key, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        lv_obj_remove_flag(key, LV_OBJ_FLAG_HIDDEN);
+        if (i >= XIGUA_KEYBOARD_PAGE_KEYS) {
+            lv_label_set_text(key, WIFI_KEYBOARD_ACTIONS[i - XIGUA_KEYBOARD_PAGE_KEYS]);
+        } else if (characters[index] == ' ') {
+            lv_label_set_text(key, "空");
+        } else {
+            char value[] = { characters[index], '\0' };
+            lv_label_set_text(key, value);
+        }
+        bool selected = index == s_wifi_keyboard_index;
+        bool mode = i >= XIGUA_KEYBOARD_PAGE_KEYS &&
+            i - XIGUA_KEYBOARD_PAGE_KEYS == (size_t)s_wifi_keyboard_mode;
+        lv_obj_set_style_bg_color(key, lv_color_hex(selected ? 0x69D2E7 :
+                                                   mode ? 0x375B82 : 0x23405A), 0);
+        lv_obj_set_style_text_color(key, lv_color_hex(selected ? 0x102332 : 0xFFFFFF), 0);
+        lv_obj_set_style_border_width(key, 0, 0);
+        lv_obj_set_style_outline_width(key, selected ? 2 : 0, 0);
+        lv_obj_set_style_outline_color(key, lv_color_hex(0xFFFFFF), 0);
+    }
 }
 
 static bool ai_request_current_mode(void)
@@ -996,9 +1064,12 @@ static void ui_refresh_page(void)
             } else if (xigua_wifi_scan_count() == 0) {
                 snprintf(text, sizeof(text), "无可用 Wi-Fi\n请重新扫描");
             } else {
-                int used = snprintf(text, sizeof(text), "网络数 %u\n\n",
-                                    (unsigned)xigua_wifi_scan_count());
-                for (size_t i = 0; i < xigua_wifi_scan_count() && i < 8 &&
+                size_t first = (s_wifi_scan_index / 5) * 5;
+                int used = snprintf(text, sizeof(text), "网络数 %u  页 %u/%u\n",
+                                    (unsigned)xigua_wifi_scan_count(),
+                                    (unsigned)(first / 5) + 1,
+                                    (unsigned)((xigua_wifi_scan_count() + 4) / 5));
+                for (size_t i = first; i < xigua_wifi_scan_count() && i < first + 5 &&
                      used > 0 && (size_t)used < sizeof(text); ++i) {
                     used += snprintf(text + used, sizeof(text) - (size_t)used,
                                      "%c %s (%d)\n", s_wifi_scan_index == i ? '>' : ' ',
@@ -1007,56 +1078,11 @@ static void ui_refresh_page(void)
             }
             ui_set_hint("上/下选择  确认输入密码  长按下键返回");
         } else if (s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
-            const char *value = s_wifi_input_password;
-            char masked[65] = { 0 };
-            for (size_t i = 0; i < s_wifi_input_len && i + 1 < sizeof(masked); i++) {
-                masked[i] = '*';
-            }
-            masked[s_wifi_input_len] = '\0';
-            value = masked;
-            const char *keys = wifi_keyboard_chars();
-            size_t key_count = strlen(keys);
-            size_t action_count = sizeof(WIFI_KEYBOARD_ACTIONS) /
-                sizeof(WIFI_KEYBOARD_ACTIONS[0]);
-            size_t selected_action = s_wifi_keyboard_index >= key_count ?
-                s_wifi_keyboard_index - key_count : SIZE_MAX;
             ui_set_title("输入 Wi-Fi 密码");
-            int used = snprintf(text, sizeof(text), "SSID：%s\n密码：%s\n",
-                                s_wifi_input_ssid[0] ? s_wifi_input_ssid : "(未选择)",
-                                value[0] ? value : "(空)");
-            for (size_t i = 0; i < key_count && used > 0 && (size_t)used < sizeof(text); i++) {
-                if (s_wifi_keyboard_index == i) {
-                    used += snprintf(text + used, sizeof(text) - (size_t)used,
-                                     "<%c> ", keys[i]);
-                } else {
-                    used += snprintf(text + used, sizeof(text) - (size_t)used,
-                                     " %c  ", keys[i]);
-                }
-                if (i % 6 == 5) used += snprintf(text + used, sizeof(text) - (size_t)used, "\n");
-            }
-            if (used > 0 && (size_t)used < sizeof(text)) {
-                used += snprintf(text + used, sizeof(text) - (size_t)used, "\n模式 ");
-            }
-            for (size_t i = 0; i < 3 && i < action_count && used > 0 &&
-                 (size_t)used < sizeof(text); i++) {
-                used += snprintf(text + used, sizeof(text) - (size_t)used,
-                                 selected_action == i ? "<%s> " : "%s ",
-                                 WIFI_KEYBOARD_ACTIONS[i]);
-            }
-            if (used > 0 && (size_t)used < sizeof(text)) {
-                used += snprintf(text + used, sizeof(text) - (size_t)used, "\n操作 ");
-            }
-            for (size_t i = 3; i < action_count && used > 0 &&
-                 (size_t)used < sizeof(text); i++) {
-                used += snprintf(text + used, sizeof(text) - (size_t)used,
-                                 selected_action == i ? "<%s> " : "%s ",
-                                 WIFI_KEYBOARD_ACTIONS[i]);
-            }
-            if (used > 0 && (size_t)used < sizeof(text)) {
-                snprintf(text + used, sizeof(text) - (size_t)used, "\n长度：%u/64",
-                         (unsigned)s_wifi_input_len);
-            }
-            ui_set_hint("上/下移动键盘  确认键选择  长按确认完成  长按下键取消");
+            snprintf(text, sizeof(text), "SSID：%s", s_wifi_input_ssid);
+            if (!s_wifi_keyboard) wifi_ui_create_keyboard();
+            wifi_ui_render_keyboard();
+            ui_set_hint("上/下移动 2次换行\n确认选择 长按确认完成");
         } else {
             ui_set_title("Wi-Fi状态");
             if (xigua_wifi_state() == XIGUA_WIFI_CONNECTED) {
@@ -1072,6 +1098,21 @@ static void ui_refresh_page(void)
     }
     if (s_page == X_PAGE_OVERVIEW && undo_available()) {
         ui_set_hint("确认键撤销最近记录  上/下选择");
+    }
+    bool editing_wifi = s_page == X_PAGE_WIFI &&
+        s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD;
+    lv_obj_set_size(s_body, 204, editing_wifi ? 22 : 190);
+    lv_label_set_long_mode(s_body, editing_wifi ? LV_LABEL_LONG_DOT : LV_LABEL_LONG_WRAP);
+    if (editing_wifi) {
+        lv_obj_remove_flag(s_wifi_keyboard, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_status, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        if (s_wifi_keyboard) {
+            lv_obj_delete(s_wifi_keyboard);
+            s_wifi_keyboard = s_wifi_password = NULL;
+            memset(s_wifi_key_labels, 0, sizeof(s_wifi_key_labels));
+        }
+        lv_obj_remove_flag(s_status, LV_OBJ_FLAG_HIDDEN);
     }
     ui_set_body_font(s_page == X_PAGE_WIFI ? 16 : 20);
     lv_label_set_text(s_body, text);
@@ -1251,6 +1292,8 @@ void xigua_app_exit(void)
         s_screen = NULL;
     }
     s_title = s_body = s_status = s_hint = s_battery = NULL;
+    s_wifi_keyboard = s_wifi_password = NULL;
+    memset(s_wifi_key_labels, 0, sizeof(s_wifi_key_labels));
 }
 
 esp_err_t xigua_app_start(void)
@@ -1394,6 +1437,9 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             ui_sync();
         } else if (btn == BSP_BTN_UP && s_page == X_PAGE_WIFI &&
                    s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
+            s_wifi_keyboard_index = s_wifi_nav.anchor;
+            s_wifi_keyboard_page = s_wifi_nav.page;
+            memset(&s_wifi_nav, 0, sizeof(s_wifi_nav));
             wifi_ui_backspace();
             ui_sync();
         } else if (btn == BSP_BTN_OK && s_page == X_PAGE_WIFI &&
@@ -1427,6 +1473,21 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             }
         }
         return;
+    }
+    if (s_page == X_PAGE_WIFI && s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD &&
+        (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN)) {
+        int direction = btn == BSP_BTN_UP ? -1 : 1;
+        size_t characters = strlen(wifi_keyboard_chars());
+        if (ev == BSP_BTN_PRESS) {
+            s_wifi_keyboard_index = xigua_keyboard_press(&s_wifi_nav,
+                s_wifi_keyboard_index, characters, &s_wifi_keyboard_page, direction);
+            ui_sync();
+        } else if (ev == BSP_BTN_DOUBLE) {
+            s_wifi_keyboard_index = xigua_keyboard_double(&s_wifi_nav,
+                s_wifi_keyboard_index, characters, &s_wifi_keyboard_page, direction);
+            ui_sync();
+        }
+        return; /* CLICK must not duplicate the movement already handled on PRESS. */
     }
     if (ev != BSP_BTN_CLICK) return;
 
@@ -1591,9 +1652,7 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         } else if (s_wifi_ui_mode == X_WIFI_UI_STATUS) {
             if (btn == BSP_BTN_OK) wifi_ui_enter_menu();
         } else if (s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
-            if (btn == BSP_BTN_UP) wifi_ui_move_key(-1);
-            else if (btn == BSP_BTN_DOWN) wifi_ui_move_key(1);
-            else if (btn == BSP_BTN_OK) wifi_ui_choose_key();
+            if (btn == BSP_BTN_OK) wifi_ui_choose_key();
         }
     }
 

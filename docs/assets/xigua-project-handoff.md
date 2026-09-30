@@ -65,6 +65,16 @@ Validation for this checkpoint:
 
 Next, run the remaining device acceptance sequence: scan/select/password entry, reconnect after credential changes, MiMo self-check, and a real voice request. Preserve the pre-existing untracked quota files listed by `git status`.
 
+## Keyboard and automatic Wi-Fi fix (2026-09-30)
+
+- Uppercase and lowercase each show all 26 letters on one page. Digits/symbols use two pages with up to 30 keys each. Type switches, Backspace, Next page, and Done stay visible; focus uses cyan fill and a white outline.
+- UP/DOWN moves on PRESS; DOUBLE moves one row from the gesture's starting key. Three or more rapid presses still move the cursor. Long UP deletes, long OK finishes, and long DOWN cancels.
+- Association timeout reason 4 now gets three retries, with a rescan after 15 seconds when candidates are exhausted. All scan results are checked, so built-in APs are not limited to the first 16 UI entries; the network list itself uses five-entry pages. Disconnects reconnect; manual search cancels background automatic flow.
+- Keyboard widgets are allocated only while editing and released on exit. Fixed UI Chinese glyph coverage passed for both 16 px and 20 px inventories.
+- Build: PASS. Merged image and debug archive verified. SHA-256: `cb7792f755c82be4209df441ca78990ba0fbebc7b03edc7ebbe76429c16dab53`; archive: `build/firmware/cb7792f755c82be4209df441ca78990ba0fbebc7b03edc7ebbe76429c16dab53/`.
+- Host tests: keyboard and Wi-Fi regression tests PASS using actual application logic; repository checks PASS. The complete gate was attempted but its actionlint installer does not support the current Windows Git Bash platform, so the gate is incomplete. The five earlier documentation-test assertion failures remain outside this change.
+- Device tests: awaiting startup, automatic connection, and MiMo self-check after flashing this image. Screen layout and physical buttons still require user observation.
+
 ## Remaining work
 
 The font coverage is improved, but the text is still too small for comfortable use on the 240x320 display. The menu hierarchy, focus indication, back navigation, and bottom hint line need a deliberate redesign rather than more labels. Long model replies need scrolling or paging and UTF-8-safe truncation.
