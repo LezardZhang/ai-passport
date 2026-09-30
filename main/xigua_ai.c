@@ -392,6 +392,8 @@ static esp_err_t record_voice(size_t *wav_bytes_out)
              XIGUA_AI_VOICE_MAX_SECONDS,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    ESP_LOGI(TAG, "voice task stack before capture=%u bytes",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
     size_t erase_bytes = (XIGUA_AI_VOICE_MAX_WAV_BYTES + 0xFFFU) & ~0xFFFU;
     esp_err_t err = esp_partition_erase_range(partition, 0, erase_bytes);
@@ -421,29 +423,35 @@ static esp_err_t record_voice(size_t *wav_bytes_out)
     uint8_t header[XIGUA_AI_WAV_HEADER_BYTES] = { 0 };
     /* Leave the erased header untouched until the final length is known.
      * Programming a zero placeholder would prevent the final 0-to-1 bits. */
-    uint8_t pcm[XIGUA_AI_AUDIO_CHUNK_BYTES];
+    /* Keep the 2 KiB audio scratch out of the shared 6 KiB AI task stack.
+     * Its caller also holds the reply and transcript while BSP/Flash calls run. */
+    uint8_t *pcm = malloc(XIGUA_AI_AUDIO_CHUNK_BYTES);
+    if (!pcm) return ESP_ERR_NO_MEM;
     size_t captured = 0;
     const size_t min_pcm = XIGUA_AI_VOICE_MIN_SECONDS * XIGUA_AI_VOICE_HZ *
                            (XIGUA_AI_VOICE_BITS / 8) * XIGUA_AI_VOICE_CHANNELS;
     while (captured < XIGUA_AI_VOICE_MAX_PCM_BYTES) {
         if (s_voice_stop && captured >= min_pcm) break;
         size_t chunk = XIGUA_AI_VOICE_MAX_PCM_BYTES - captured;
-        if (chunk > sizeof(pcm)) chunk = sizeof(pcm);
+        if (chunk > XIGUA_AI_AUDIO_CHUNK_BYTES) chunk = XIGUA_AI_AUDIO_CHUNK_BYTES;
         err = bsp_audio_read(pcm, chunk);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "microphone read failed at %u/%u: %s",
                      (unsigned)captured, (unsigned)XIGUA_AI_VOICE_MAX_PCM_BYTES,
                      esp_err_to_name(err));
+            free(pcm);
             return err;
         }
         err = esp_partition_write(partition, XIGUA_AI_WAV_HEADER_BYTES + captured, pcm, chunk);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "voice flash write failed at %u: %s", (unsigned)captured,
                      esp_err_to_name(err));
+            free(pcm);
             return err;
         }
         captured += chunk;
     }
+    free(pcm);
     wav_header(header, captured);
     err = esp_partition_write(partition, 0, header, sizeof(header));
     (void)bsp_audio_sleep();
@@ -452,6 +460,8 @@ static esp_err_t record_voice(size_t *wav_bytes_out)
     ESP_LOGI(TAG, "voice record complete seconds=%u bytes=%u",
              (unsigned)(captured / (XIGUA_AI_VOICE_HZ * (XIGUA_AI_VOICE_BITS / 8))),
              (unsigned)*wav_bytes_out);
+    ESP_LOGI(TAG, "voice task stack after capture=%u bytes",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
     return ESP_OK;
 }
 

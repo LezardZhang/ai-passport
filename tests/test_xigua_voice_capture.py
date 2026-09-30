@@ -38,6 +38,7 @@ STUBS = r'''
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 typedef int esp_err_t;
 #define ESP_OK 0
@@ -45,6 +46,7 @@ typedef int esp_err_t;
 #define ESP_ERR_INVALID_ARG 1
 #define ESP_ERR_INVALID_SIZE 2
 #define ESP_ERR_INVALID_STATE 3
+#define ESP_ERR_NO_MEM 4
 #define MALLOC_CAP_8BIT 0
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGE(...) ((void)0)
@@ -53,6 +55,19 @@ static esp_partition_t partition = { 2 * 1024 * 1024 };
 static uint8_t flash[2 * 1024 * 1024];
 static volatile bool s_voice_stop;
 static size_t header_writes, read_calls, fail_read_at;
+static bool fail_alloc, fail_write;
+static size_t allocations;
+static void *capture_alloc(size_t length) {
+    if (fail_alloc) return NULL;
+    void *data = malloc(length);
+    if (data) ++allocations;
+    return data;
+}
+static void capture_free(void *data) {
+    assert(data && allocations); --allocations; free(data);
+}
+#define malloc capture_alloc
+#define free capture_free
 static const esp_partition_t *voice_partition(void) { return &partition; }
 static esp_err_t esp_partition_erase_range(const esp_partition_t *p,
                                           size_t offset, size_t length) {
@@ -63,6 +78,7 @@ static esp_err_t esp_partition_erase_range(const esp_partition_t *p,
 static esp_err_t esp_partition_write(const esp_partition_t *p, size_t offset,
                                     const void *data, size_t length) {
     assert(p == &partition && offset + length <= p->size);
+    if (offset && fail_write) return ESP_FAIL;
     if (!offset) header_writes++;
     const uint8_t *bytes = data;
     /* NOR Flash programming can only change an erased 1 bit into 0. */
@@ -88,6 +104,8 @@ static uint32_t u32(size_t offset) {
 }
 static void setup(bool stop, size_t failure) {
     s_voice_stop = stop; fail_read_at = failure;
+    assert(allocations == 0);
+    fail_alloc = fail_write = false;
     header_writes = read_calls = 0;
 }
 static void check_wav(size_t length) {
@@ -106,12 +124,19 @@ int main(void) {
     assert(record_voice(&length) == ESP_OK);
     assert(length >= 32000+44 && length <= 32000+2048+44);
     check_wav(length);
+    assert(allocations == 0);
     setup(false, SIZE_MAX);
     assert(record_voice(&length) == ESP_OK && length == 60*32000+44);
     check_wav(length);
+    assert(allocations == 0);
     setup(false, 1);
     assert(record_voice(&length) == ESP_FAIL && header_writes == 0);
     assert(flash[0] == 0xff && flash[43] == 0xff);
+    assert(allocations == 0);
+    setup(false, SIZE_MAX); fail_alloc = true;
+    assert(record_voice(&length) == ESP_ERR_NO_MEM && allocations == 0 && read_calls == 0);
+    setup(false, SIZE_MAX); fail_write = true;
+    assert(record_voice(&length) == ESP_FAIL && allocations == 0 && header_writes == 0);
     assert(record_voice(NULL) == ESP_ERR_INVALID_ARG);
     puts("Xigua voice capture NOR Flash/WAV tests: PASS");
     return 0;

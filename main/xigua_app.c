@@ -7,6 +7,7 @@
 #include "xigua_keyboard.h"
 #include "xigua_ai_ui.h"
 #include "xigua_text.h"
+#include "xigua_menu.h"
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -177,6 +178,9 @@ static lv_obj_t *s_battery;
 static lv_obj_t *s_ai_panel;
 static lv_obj_t *s_ai_text;
 static lv_obj_t *s_ai_cards[3];
+static lv_obj_t *s_home_panel;
+static lv_obj_t *s_home_summary;
+static lv_obj_t *s_home_cards[3];
 static x_ai_view_t s_ai_rendered_view = (x_ai_view_t)-1;
 static lv_timer_t *s_timer;
 
@@ -233,6 +237,9 @@ static const char *const TIMEZONE_VALUES[] = {
 static const char *const FEED_INGREDIENTS[] = { "奶粉", "母乳", "辅食", "其他" };
 static const char *const ACTIVE_NAMES[] = {
     "", "睡眠", "洗澡", "趴玩", "计时"
+};
+static const char *const HOME_ITEMS[] = {
+    "AI助手", "手动记录", "今天", "睡眠", "声音", "Wi-Fi配网", "设置"
 };
 
 static bool valid_timer_minutes(uint16_t minutes)
@@ -908,6 +915,52 @@ static bool ai_request_voice_current_mode(void)
     return true;
 }
 
+static lv_obj_t *ui_menu_card(lv_obj_t *parent, int y)
+{
+    lv_obj_t *card = make_label(parent, 0, y, 204, 38, "", 0xFFFFFF, 20);
+    lv_obj_set_style_pad_left(card, 10, 0);
+    lv_obj_set_style_pad_top(card, 6, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 6, 0);
+    return card;
+}
+
+static void ui_menu_focus(lv_obj_t *card, bool selected)
+{
+    lv_obj_set_style_bg_color(card, lv_color_hex(selected ? 0x69D2E7 : 0x23405A), 0);
+    lv_obj_set_style_text_color(card, lv_color_hex(selected ? 0x102332 : 0xFFFFFF), 0);
+    lv_obj_set_style_outline_width(card, selected ? 2 : 0, 0);
+    lv_obj_set_style_outline_color(card, lv_color_hex(0xFFFFFF), 0);
+}
+
+static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper)
+{
+    if (!s_home_panel) {
+        s_home_panel = lv_obj_create(s_screen);
+        lv_obj_remove_style_all(s_home_panel);
+        lv_obj_remove_flag(s_home_panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_pos(s_home_panel, 18, 54);
+        lv_obj_set_size(s_home_panel, 204, 190);
+        s_home_summary = make_label(s_home_panel, 0, 0, 204, 46, "", 0xB9C7D1, 16);
+        for (size_t i = 0; i < 3; ++i) s_home_cards[i] = ui_menu_card(s_home_panel, 54 + (int)i * 44);
+    }
+    lv_obj_add_flag(s_body, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text_fmt(s_home_summary, "奶量 %u 毫升\n睡眠 %u 次  尿便 %u 次",
+                          milk_ml, sleep, diaper);
+    size_t first = xigua_menu_first(s_focus, 3);
+    for (size_t i = 0; i < 3; ++i) {
+        if (first + i >= sizeof(HOME_ITEMS) / sizeof(HOME_ITEMS[0])) {
+            lv_obj_add_flag(s_home_cards[i], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        lv_obj_remove_flag(s_home_cards[i], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_home_cards[i], HOME_ITEMS[first + i]);
+        ui_menu_focus(s_home_cards[i], first + i == s_focus);
+    }
+    if (!s_feedback[0]) lv_label_set_text_fmt(s_status, "菜单 %u / 3", (unsigned)(first / 3 + 1));
+    ui_set_hint("上/下选择  确认打开\n长按上键快速喂奶");
+}
+
 static void ui_ai_render(void)
 {
     if (!s_ai_panel) {
@@ -936,12 +989,7 @@ static void ui_ai_render(void)
         }
         if (cards) {
             for (size_t i = 0; i < 3; ++i) {
-                s_ai_cards[i] = make_label(s_ai_panel, 0, 54 + (int)i * 44,
-                                           204, 38, "", 0xFFFFFF, 20);
-                lv_obj_set_style_pad_left(s_ai_cards[i], 10, 0);
-                lv_obj_set_style_pad_top(s_ai_cards[i], 6, 0);
-                lv_obj_set_style_bg_opa(s_ai_cards[i], LV_OPA_COVER, 0);
-                lv_obj_set_style_radius(s_ai_cards[i], 6, 0);
+                s_ai_cards[i] = ui_menu_card(s_ai_panel, 54 + (int)i * 44);
             }
         }
         s_ai_rendered_view = s_ai_ui.view;
@@ -956,12 +1004,8 @@ static void ui_ai_render(void)
                           "长按确认说话\n松开结束录音" : "请选择操作\n回复仍可查看");
         for (size_t i = 0; i < 3; ++i) {
             lv_obj_t *card = s_ai_cards[i];
-            bool selected = i == s_ai_ui.focus;
             lv_label_set_text(card, s_ai_ui.view == X_AI_READY ? ready[i] : actions[i]);
-            lv_obj_set_style_bg_color(card, lv_color_hex(selected ? 0x69D2E7 : 0x23405A), 0);
-            lv_obj_set_style_text_color(card, lv_color_hex(selected ? 0x102332 : 0xFFFFFF), 0);
-            lv_obj_set_style_outline_width(card, selected ? 2 : 0, 0);
-            lv_obj_set_style_outline_color(card, lv_color_hex(0xFFFFFF), 0);
+            ui_menu_focus(card, i == s_ai_ui.focus);
         }
         lv_label_set_text(s_status, s_ai_ui.view == X_AI_ACTIONS ? "回复仍可查看" : s_feedback);
         ui_set_hint("上/下选择  确认打开\n长按下键返回");
@@ -1013,9 +1057,6 @@ static void ui_refresh_page(void)
     case X_PAGE_OVERVIEW:
         ui_set_title("西瓜助手");
         {
-            static const char *const HOME_ITEMS[] = {
-                "AI助手", "手动记录", "今天", "睡眠", "声音", "Wi-Fi配网", "设置"
-            };
             snprintf(text, sizeof(text), "> %s\n\n奶量 %u 毫升（%u 次）\n睡眠 %u 次  尿便 %u 次\n进行中：%s",
                  HOME_ITEMS[s_focus],
                  snapshot.data.milk_ml, feed_count,
@@ -1179,6 +1220,13 @@ static void ui_refresh_page(void)
     lv_label_set_text(s_body, text);
     if (snapshot.battery_soc >= 0) lv_label_set_text_fmt(s_battery, "%d%%", snapshot.battery_soc);
     if (s_status) lv_label_set_text(s_status, s_feedback);
+    if (s_page == X_PAGE_OVERVIEW) ui_home_render(snapshot.data.milk_ml, sleep_count,
+                                               (unsigned)(pee_count + poop_count));
+    else if (s_home_panel) {
+        lv_obj_delete(s_home_panel);
+        s_home_panel = s_home_summary = NULL;
+        memset(s_home_cards, 0, sizeof(s_home_cards));
+    }
     if (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) ui_ai_render();
     else if (s_ai_panel) {
         lv_obj_delete(s_ai_panel);
@@ -1368,6 +1416,8 @@ void xigua_app_exit(void)
     s_title = s_body = s_status = s_hint = s_battery = NULL;
     s_wifi_keyboard = s_wifi_password = NULL;
     s_ai_panel = s_ai_text = NULL;
+    s_home_panel = s_home_summary = NULL;
+    memset(s_home_cards, 0, sizeof(s_home_cards));
     memset(s_ai_cards, 0, sizeof(s_ai_cards));
     s_ai_rendered_view = (x_ai_view_t)-1;
     memset(s_wifi_key_labels, 0, sizeof(s_wifi_key_labels));
@@ -1497,6 +1547,15 @@ esp_err_t xigua_app_ai_response(const char *json)
 void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
     if (!s_running) return;
+    if (s_page == X_PAGE_OVERVIEW && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) &&
+        ev != BSP_BTN_LONG) {
+        if (ev == BSP_BTN_PRESS) {
+            s_focus = xigua_menu_move(s_focus, sizeof(HOME_ITEMS) / sizeof(HOME_ITEMS[0]),
+                                      btn == BSP_BTN_DOWN);
+            ui_sync();
+        }
+        return; /* PRESS moves once, CLICK/DOUBLE must not repeat it. */
+    }
     if (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) {
         x_ai_input_t input;
         if (ev == BSP_BTN_PRESS && btn == BSP_BTN_UP) input = X_AI_UP;

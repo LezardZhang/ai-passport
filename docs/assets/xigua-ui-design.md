@@ -47,12 +47,19 @@ timers, and callbacks stop before their page objects are deleted.
 
 The 240×320 display has four fixed areas:
 
-1. A 28 px status bar: time or `--:--`, network state, and battery percentage.
-2. A roughly 118 px focus card with one action, one line of state, and a verb.
-3. A roughly 92 px summary card for active elapsed time and two today metrics.
-4. A roughly 42 px key bar: `▲ Previous`, `▼ Next`, `● Open`.
+1. A title and battery header.
+2. A 204×190 px content area with a two-line milk/sleep/diaper summary and up
+   to three 38 px menu cards, separated by 6 px gaps.
+3. A feedback line, showing the menu page number when no action feedback exists.
+4. A fixed two-line key hint: UP/DOWN selects, OK opens, hold UP records feeding.
 
-The focus order is AI assistant → Manual record → Today → Sleep → Sound → Settings.
+The focus order is AI assistant → Manual record → Today → Sleep → Sound →
+Wi-Fi → Settings. The three menu pages contain 3, 3, and 1 items; UP/DOWN wraps
+between the first and last items. Selection moves on PRESS, so rapid repeated
+presses continue moving even when the driver subsequently reports DOUBLE.
+Menu cards share the AI preparation/action colors: dark blue background, cyan
+selection with dark text and a white outline. Cards exist only on the Overview
+page. The short undo window still takes priority over opening a menu item.
 The AI assistant is the single top-level entry: the model can call local records through
 JSON, while text/TTS is reserved for content that needs a parent-facing response.
 Audio and network changes
@@ -157,8 +164,11 @@ and `cancelled` branches. Messages always state both the result and the next key
 The UI avoids full-screen images and double buffers, keeps the existing LVGL pool
 and partial RGB565 buffer budget, dims the backlight after about 20 seconds, and
 uses the first key after wake only to wake the screen. Storage, TLS, audio, and
-Flash writes run in workers. Initial voice recording is capped at a measured
-three-second, roughly 96 KB PCM buffer until memory tests justify more.
+Flash writes run in workers. Voice capture streams 16 kHz mono PCM into the
+recording partition for up to 60 seconds. Its 2 KiB scratch buffer is allocated
+only for capture and freed on success or read/write failure, keeping it out of
+the shared 6 KiB AI task stack. Capture logs include stack high-water marks;
+these diagnostics do not by themselves establish the cause of a device reboot.
 
 Fixed Chinese strings use the built-in Source Han Sans SC 16 CJK subset only after
 glyph coverage is checked. Numbers and units may use Montserrat, but mixed lines

@@ -131,6 +131,35 @@ returned HTTP 200 / `ESP_OK`. Initial TLS heap: 124,160 bytes free, largest
 106,496 bytes. No reboot or allocation failure appeared in the bounded log.
 Physical acceptance of the redesigned page is pending.
 
+## Home menu and recording stack (2026-09-30)
+
+The owner reported a reboot when recording seconds appear and requested the
+AI page's background/card selection for the main menu. Overview now shows a
+two-line summary and three menu cards per page, with seven entries on three
+pages. UP/DOWN moves on PRESS without waiting for CLICK/DOUBLE; the selected
+card shares the AI menu's cyan fill, dark text, and white outline.
+
+The recording reboot has not yet been captured in serial output. Matching
+compiler stack-usage reports showed 2128 bytes for `record_voice`, plus 560
+for `voice_once` and 1440 for `ai_task`, before nested BSP/Flash calls on the
+6144-byte worker stack. Moving the 2048-byte PCM scratch to a capture-lifetime
+allocation reduces the capture frame to 80 bytes. All success/read/write error
+paths release it; allocation failure returns `ESP_ERR_NO_MEM`. Capture logs now
+include task stack high-water marks. This removes measured stack pressure;
+the exact reboot cause remains unconfirmed without a panic or physical retest.
+
+Build, merged/archive verification, menu navigation, AI interaction, NOR/WAV
+capture (including allocation/write failure), keyboard, Wi-Fi, and full-font
+checks PASS. The new labels are covered by the selected fixed fonts. The
+complete gate was attempted; the Windows actionlint installer still blocks it.
+App: 5,764,000 bytes; factory free: 461,920 bytes. Partition table unchanged.
+Merged SHA-256:
+`aa875be0e0cfbe9ddbd34ad484d67156376c1d1552ea3836810e81ba61d34046`.
+Matching ELF SHA-256:
+`47cbb2ae5b0e76b154a0fd0c11151682691f515b060fbf064a1c18aab3c075be`.
+Archive: `build/firmware/aa875be0e0cfbe9ddbd34ad484d67156376c1d1552ea3836810e81ba61d34046/`.
+Physical recording and card rendering acceptance are pending.
+
 ## Remaining work
 
 The font coverage is improved, but the text is still too small for comfortable use on the 240x320 display. The menu hierarchy, focus indication, back navigation, and bottom hint line need a deliberate redesign rather than more labels. The AI page now has paging and UTF-8-safe truncation; replies beyond 1024 bytes and the visual quality of the reader still need review.
