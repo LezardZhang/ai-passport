@@ -27,7 +27,7 @@
 
 extern const lv_font_t xigua_font_zh16;
 extern const lv_font_t xigua_font_zh20;
-extern const lv_font_t lv_font_source_han_sans_sc_16_cjk;
+extern const lv_font_t xigua_font_full20;
 static lv_font_t s_xigua_font;
 static lv_font_t s_xigua_font20;
 static bool s_xigua_font_ready;
@@ -1005,14 +1005,15 @@ static void ui_refresh_page(void)
         break;
     case X_PAGE_VOICE:
         ui_set_title("AI助手");
-        snprintf(text, sizeof(text), "%s\n\n长按确认键说话\n%s",
-                 s_ai_mode == 0 ? "问答/记录" : "讲故事/语音",
-                 s_ai_reply[0] ? s_ai_reply : "可记录喂养、尿便、睡眠等事项");
+        if (s_ai_reply[0]) snprintf(text, sizeof(text), "%s", s_ai_reply);
+        else snprintf(text, sizeof(text), "%s\n\n长按确认键说话\n可记录喂养、尿便、睡眠等事项",
+                      s_ai_mode == 0 ? "问答/记录" : "讲故事/语音");
         ui_set_hint("上/下切换模式  确认键文字请求  长按后松开结束录音");
         break;
     case X_PAGE_STORY:
         ui_set_title("讲故事");
-        snprintf(text, sizeof(text), "故事模式\n\n长按确认键说话\n回复将显示在此处");
+        if (s_ai_reply[0]) snprintf(text, sizeof(text), "%s", s_ai_reply);
+        else snprintf(text, sizeof(text), "故事模式\n\n长按确认键说话\n回复将显示在此处");
         ui_set_hint("长按确认说话  松开结束录音  长按下键返回");
         break;
     case X_PAGE_SOUND:
@@ -1115,6 +1116,10 @@ static void ui_refresh_page(void)
         lv_obj_remove_flag(s_status, LV_OBJ_FLAG_HIDDEN);
     }
     ui_set_body_font(s_page == X_PAGE_WIFI ? 16 : 20);
+    /* Arbitrary model text must use the complete font as the primary face. */
+    if (s_ai_reply[0] && (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY)) {
+        lv_obj_set_style_text_font(s_body, &xigua_font_full20, LV_PART_MAIN);
+    }
     lv_label_set_text(s_body, text);
     if (snapshot.battery_soc >= 0) lv_label_set_text_fmt(s_battery, "%d%%", snapshot.battery_soc);
     if (s_status) lv_label_set_text(s_status, s_feedback);
@@ -1271,9 +1276,9 @@ void xigua_app_enter(void)
 {
     if (!s_xigua_font_ready) {
         s_xigua_font = xigua_font_zh16;
-        s_xigua_font.fallback = &lv_font_source_han_sans_sc_16_cjk;
+        s_xigua_font.fallback = &xigua_font_full20;
         s_xigua_font20 = xigua_font_zh20;
-        s_xigua_font20.fallback = &lv_font_source_han_sans_sc_16_cjk;
+        s_xigua_font20.fallback = &xigua_font_full20;
         s_xigua_font_ready = true;
     }
     ui_shell();

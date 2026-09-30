@@ -3,6 +3,7 @@ idf_component_register(
          "xigua_app.c"
          "xigua_font_zh16.c"
          "xigua_font_zh20.c"
+         "../assets/fonts/xigua_font_full20.c"
          "xigua_wifi.c"
          "xigua_ai.c"
          "xigua_wifi_radio.c"

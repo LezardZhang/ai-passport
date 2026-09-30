@@ -12,6 +12,10 @@ Keep each asset in the matching subdirectory and document its destination, namin
 
 Store reusable font files and generated font sources in `fonts/`.
 
+The tracked Source Han Sans SC 2.005 full reply font, original OTF, license,
+coverage inventory, and hash manifest are documented in
+[Xigua complete reply font](../docs/assets/xigua-full-font.md).
+
 - Use descriptive names that include the family, weight, size, and format when relevant.
 - Document the source, license, character range, conversion command, and expected destination.
 - Check Flash and internal-RAM impact before adding a font; the ESP32-C3 has no PSRAM.

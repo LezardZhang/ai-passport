@@ -1,0 +1,15 @@
+{
+  "family": "Source Han Sans SC Regular",
+  "version": "2.005",
+  "license": "SIL OFL 1.1",
+  "source_url": "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/2.005R/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf",
+  "source_sha256": "f1d8611151880c6c336aabeac4640ef434fa13cbfbf1ffe82d0a71b2a5637256",
+  "converter": "lv_font_conv@1.5.3",
+  "size": 20,
+  "bpp": 2,
+  "compressed": true,
+  "kerning": false,
+  "range": "0x20-0x10FFFF",
+  "codepoints": 44853,
+  "generated_sha256": "1ed1efdc1730be170568a4bbabebd4174b15aef36fbed3d78c09d3305092cc4c"
+}

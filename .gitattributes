@@ -1,0 +1,2 @@
+# Preserve generated font hashes across Windows and Unix checkouts.
+assets/fonts/xigua_font_full20.c text eol=lf

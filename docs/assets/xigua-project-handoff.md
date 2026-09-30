@@ -85,6 +85,24 @@ A three-second device recording completed, but ASR returned HTTP 400 with a 134-
 
 The recorder now leaves the erased header area untouched while writing PCM and programs the final header once. ASR failures log a bounded response preview. The new host regression compiles the actual capture functions against a NOR Flash model and checks RIFF lengths, PCM, minimum/maximum recordings, and an interrupted capture. It passes. Build, merged-image and archive verification PASS; source checkpoint: `0319500367447a53632e49ca6723206d77cacd71`, merged SHA-256: `0e204d4c23ebcda686816038506206cc9fc7ae895ea6d064ec20f2b2c5d0a643`, archive: `build/firmware/0e204d4c23ebcda686816038506206cc9fc7ae895ea6d064ec20f2b2c5d0a643/`. COM6 segmented flash and boot PASS with NVS preserved; the matching ELF prefix `524657437` automatically obtained `192.168.10.214` and completed MiMo text self-check with HTTP 200 / `ESP_OK`. The complete gate was attempted and is still blocked by unsupported Windows Git Bash actionlint installation. A new physical voice recording is pending user acceptance; text self-check does not validate ASR or microphone quality.
 
+## Complete reply font (2026-09-30)
+
+The owner confirmed the corrected voice path works. AI/story replies now use
+the complete Source Han Sans SC 2.005 font: 44,853 source codepoints, 20 px,
+2 bpp compressed, with every basic/Extension A Han character verified against
+the original OTF. Source assets and generation tooling are tracked for fresh
+clones. Fixed menu fonts retain their compact layout and use the full font as
+fallback; the duplicate built-in Chinese subset is disabled. See
+[font coverage, generation, and resource budget](xigua-full-font.md).
+
+Build and merged/archive verification PASS. Application: 5,761,040 bytes;
+factory free: 464,880 bytes. Merged SHA-256:
+`da415083206835b7e9463f5cc2f00daffe10e96c6f40e30ca7007e67d8ed1000`.
+Font coverage, voice NOR/WAV, keyboard, Wi-Fi regressions and repository checks
+PASS. The complete gate was attempted but the actionlint installer still rejects
+the Windows Git Bash platform. On-screen rendering and long replies remain
+pending physical acceptance; the existing 192-byte reply buffer is unchanged.
+
 ## Remaining work
 
 The font coverage is improved, but the text is still too small for comfortable use on the 240x320 display. The menu hierarchy, focus indication, back navigation, and bottom hint line need a deliberate redesign rather than more labels. Long model replies need scrolling or paging and UTF-8-safe truncation.
