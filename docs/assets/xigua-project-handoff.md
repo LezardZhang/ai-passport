@@ -75,6 +75,10 @@ Next, run the remaining device acceptance sequence: scan/select/password entry, 
 - Host tests: keyboard and Wi-Fi regression tests PASS using actual application logic; repository checks PASS. The complete gate was attempted but its actionlint installer does not support the current Windows Git Bash platform, so the gate is incomplete. The five earlier documentation-test assertion failures remain outside this change.
 - Device tests: COM6 flash and startup PASS with NVS preserved; source checkpoint: `33fff9eb84774a465949095d89baac7e1bcc90b9`. About 43 seconds after startup the device automatically connected to `GUANTANG_2.4G` and obtained `192.168.10.214`. Earlier reason 4/205 failures triggered retries and a rescan instead of permanently stopping in network search. Initial connection is still slow: the log shows association failures at several channels for the same SSID before success. The bounded post-connect observation did not capture a MiMo self-check result and included a beacon-timeout probe message; sustained connection stability, screen layout, and physical buttons remain unverified.
 
+## MiMo credential correction (2026-09-30)
+
+The model self-check failure was caused by a different standard API key stored in the tracked header while using the Token Plan endpoint. The owner supplied the intended Token Plan key; it is now stored in `main/xigua_ai_credentials.h`, keeping the Token Plan endpoint unchanged. Both a minimal request and the firmware self-check payload returned HTTP 200 with `OK` from the host using the corrected key. Credential values are omitted here. Firmware and device verification are pending this checkpoint.
+
 ## Remaining work
 
 The font coverage is improved, but the text is still too small for comfortable use on the 240x320 display. The menu hierarchy, focus indication, back navigation, and bottom hint line need a deliberate redesign rather than more labels. Long model replies need scrolling or paging and UTF-8-safe truncation.

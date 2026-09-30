@@ -2,7 +2,7 @@
 
 /* Owner-authorized MiMo configuration for this private repository. */
 #define XIGUA_AI_BASE_URL "https://token-plan-cn.xiaomimimo.com/v1"
-#define XIGUA_AI_API_KEY "sk-cbaadp0xkt6cgifl5mcuhoort8ny1nrm0rv80vs5el1lzio7"
+#define XIGUA_AI_API_KEY "tp-cfm4z663y5yaq7ofvx7c557phj6pq5o7pkjyr9c83b6apjd5"
 #define XIGUA_AI_CHAT_MODEL "mimo-v2.6-flash"
 #define XIGUA_AI_CHAT_PRO_MODEL "mimo-v2.6-pro"
 #define XIGUA_AI_CHAT_LEGACY_PRO_MODEL "mimo-v2.5-pro"
