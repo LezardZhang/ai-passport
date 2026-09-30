@@ -15,3 +15,5 @@ managed_components/
 # Local quota/API credentials; never commit these files.
 *credentials*.json
 quota_config_local.h
+xigua_wifi_credentials_local.h
+xigua_ai_credentials_local.h

@@ -24,6 +24,7 @@ CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_DEF_REFR_PERIOD=20
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK=y
 # LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
 # 本 demo UI 简单,24KB 足够;若自建复杂界面出现绘制卡死/看门狗,调大此值。
 CONFIG_LV_MEM_SIZE_KILOBYTES=24
@@ -46,3 +47,13 @@ CONFIG_BT_NIMBLE_NVS_PERSIST=n
 
 # BLUFI security uses the mbedTLS Diffie-Hellman module.
 CONFIG_MBEDTLS_DHM_C=y
+# Allow mbedTLS to use the normal ESP heap on this no-PSRAM target. The
+# internal-only allocator can leave a usable 4-8 KiB block unavailable after
+# LVGL and NimBLE start, which makes certificate verification fail.
+CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=n
+CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
+# Keep TLS buffers off the permanent heap on the no-PSRAM ESP32-C3. This lets
+# the automatic HTTPS/MiMo self-check coexist with LVGL and NimBLE.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096

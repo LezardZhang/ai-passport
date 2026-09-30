@@ -1,0 +1,8 @@
+LXGW WenKai (霞鹜文楷)
+
+The generated xigua_font_zh16.c asset is derived from LXGW WenKai Regular,
+an open-source font released under the SIL Open Font License 1.1.
+
+Project: https://github.com/lxgw/LxgwWenKai
+Source font: fonts/TTF/LXGWWenKai-Regular.ttf
+License: https://scripts.sil.org/OFL

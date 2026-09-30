@@ -22,6 +22,35 @@
 #include "nimble/nimble_port_freertos.h"
 #include "services/gap/ble_svc_gap.h"
 #include <string.h>
+#include <stdint.h>
+
+#if defined(__has_include)
+#if __has_include("xigua_wifi_credentials_local.h")
+#include "xigua_wifi_credentials_local.h"
+#endif
+#endif
+
+#ifndef XIGUA_WIFI_BUILTIN_COUNT
+#define XIGUA_WIFI_BUILTIN_COUNT 0
+#endif
+#ifndef XIGUA_WIFI_BUILTIN_SSID_0
+#define XIGUA_WIFI_BUILTIN_SSID_0 ""
+#endif
+#ifndef XIGUA_WIFI_BUILTIN_PASSWORD_0
+#define XIGUA_WIFI_BUILTIN_PASSWORD_0 ""
+#endif
+#ifndef XIGUA_WIFI_BUILTIN_SSID_1
+#define XIGUA_WIFI_BUILTIN_SSID_1 ""
+#endif
+#ifndef XIGUA_WIFI_BUILTIN_PASSWORD_1
+#define XIGUA_WIFI_BUILTIN_PASSWORD_1 ""
+#endif
+#ifndef XIGUA_WIFI_BUILTIN_SSID_2
+#define XIGUA_WIFI_BUILTIN_SSID_2 ""
+#endif
+#ifndef XIGUA_WIFI_BUILTIN_PASSWORD_2
+#define XIGUA_WIFI_BUILTIN_PASSWORD_2 ""
+#endif
 
 static const char *TAG = "xigua_wifi";
 // ESP Config 微信小程序默认只显示以 "BLUFI" 开头的设备。
@@ -63,7 +92,134 @@ static bool s_ble_connected;
 static bool s_wifi_connecting;
 static bool s_wifi_got_ip;
 static bool s_reconnect_after_disconnect;
+static bool s_auto_scan_pending;
+static bool s_auto_connecting;
+static bool s_auto_saved_seen;
+static bool s_auto_saved_tried;
+static bool s_auto_builtin_seen[3];
+static bool s_auto_builtin_tried[3];
+static uint8_t s_auto_candidate_retries;
+static wifi_config_t s_saved_config;
+static wifi_ap_record_t s_auto_scan_records[32];
 static SemaphoreHandle_t s_host_stopped;
+static const char *const s_builtin_ssids[] = {
+    XIGUA_WIFI_BUILTIN_SSID_0, XIGUA_WIFI_BUILTIN_SSID_1, XIGUA_WIFI_BUILTIN_SSID_2
+};
+static const char *const s_builtin_passwords[] = {
+    XIGUA_WIFI_BUILTIN_PASSWORD_0, XIGUA_WIFI_BUILTIN_PASSWORD_1,
+    XIGUA_WIFI_BUILTIN_PASSWORD_2
+};
+
+static void normalize_sta_config(wifi_config_t *config)
+{
+    if (!config) return;
+    config->sta.bssid_set = false;
+    memset(config->sta.bssid, 0, sizeof(config->sta.bssid));
+    config->sta.pmf_cfg.capable = config->sta.password[0] != '\0';
+    config->sta.pmf_cfg.required = false;
+    config->sta.threshold.authmode = config->sta.password[0] != '\0'
+        ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+}
+
+static size_t builtin_index_for_ssid(const char *ssid)
+{
+    for (size_t i = 0; i < xigua_wifi_builtin_count(); i++) {
+        if (strcmp(ssid, s_builtin_ssids[i]) == 0) return i;
+    }
+    return SIZE_MAX;
+}
+
+static esp_err_t persist_connected_config(void)
+{
+    esp_err_t err = esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+    if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_STA, &s_sta_config);
+    esp_err_t ram_err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    return err != ESP_OK ? err : ram_err;
+}
+
+static void auto_try_next_candidate(void)
+{
+    while (true) {
+        if (s_auto_saved_seen && !s_auto_saved_tried) {
+            s_auto_saved_tried = true;
+            s_sta_config = s_saved_config;
+            ESP_LOGI(TAG, "auto Wi-Fi trying last connected network %.32s",
+                     s_sta_config.sta.ssid);
+        } else {
+            size_t builtin = SIZE_MAX;
+            for (size_t i = 0; i < xigua_wifi_builtin_count(); i++) {
+                if (s_auto_builtin_seen[i] && !s_auto_builtin_tried[i]) {
+                    builtin = i;
+                    break;
+                }
+            }
+            if (builtin == SIZE_MAX) break;
+            s_auto_builtin_tried[builtin] = true;
+            s_auto_candidate_retries = 0;
+            memset(&s_sta_config, 0, sizeof(s_sta_config));
+            snprintf((char *)s_sta_config.sta.ssid, sizeof(s_sta_config.sta.ssid), "%s",
+                     s_builtin_ssids[builtin]);
+            snprintf((char *)s_sta_config.sta.password, sizeof(s_sta_config.sta.password), "%s",
+                     s_builtin_passwords[builtin]);
+            normalize_sta_config(&s_sta_config);
+            ESP_LOGI(TAG, "auto Wi-Fi trying built-in network %.32s", s_builtin_ssids[builtin]);
+        }
+        normalize_sta_config(&s_sta_config);
+        esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &s_sta_config);
+        if (err == ESP_OK) err = esp_wifi_connect();
+        if (err == ESP_OK) {
+            s_auto_connecting = true;
+            s_wifi_connecting = true;
+            s_wifi_got_ip = false;
+            s_state = BLUFI_DEMO_WIFI_CONNECTING;
+            return;
+        }
+        ESP_LOGW(TAG, "auto Wi-Fi candidate could not start: %s", esp_err_to_name(err));
+    }
+    s_auto_connecting = false;
+    s_wifi_connecting = false;
+    s_wifi_got_ip = false;
+    s_ip[0] = '\0';
+    s_state = s_ble_connected ? BLUFI_DEMO_BLE_CONNECTED : BLUFI_DEMO_ADVERTISING;
+    ESP_LOGI(TAG, "no usable saved or built-in Wi-Fi; waiting for manual provisioning");
+}
+
+static void auto_connect_after_scan(void)
+{
+    uint16_t count = 32;
+    memset(s_auto_scan_records, 0, sizeof(s_auto_scan_records));
+    if (esp_wifi_scan_get_ap_records(&count, s_auto_scan_records) != ESP_OK) {
+        count = 0;
+    }
+    s_auto_saved_seen = false;
+    s_auto_saved_tried = false;
+    memset(s_auto_builtin_seen, 0, sizeof(s_auto_builtin_seen));
+    memset(s_auto_builtin_tried, 0, sizeof(s_auto_builtin_tried));
+    for (uint16_t i = 0; i < count; i++) {
+        if (s_saved_config.sta.ssid[0] != '\0' &&
+            strcmp((const char *)s_auto_scan_records[i].ssid, (const char *)s_saved_config.sta.ssid) == 0)
+            s_auto_saved_seen = true;
+        size_t builtin = builtin_index_for_ssid((const char *)s_auto_scan_records[i].ssid);
+        if (builtin != SIZE_MAX) s_auto_builtin_seen[builtin] = true;
+    }
+    auto_try_next_candidate();
+}
+
+static void start_auto_scan(void)
+{
+    wifi_scan_config_t config = { 0 };
+    config.show_hidden = true;
+    config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    s_auto_scan_pending = true;
+    s_wifi_connecting = true;
+    s_state = BLUFI_DEMO_WIFI_CONNECTING;
+    if (esp_wifi_scan_start(&config, false) != ESP_OK) {
+        s_auto_scan_pending = false;
+        ESP_LOGW(TAG, "auto Wi-Fi scan failed; waiting for manual provisioning");
+        s_wifi_connecting = false;
+        s_state = s_ble_connected ? BLUFI_DEMO_BLE_CONNECTED : BLUFI_DEMO_ADVERTISING;
+    }
+}
 
 static void send_wifi_report(esp_blufi_sta_conn_state_t state)
 {
@@ -98,15 +254,18 @@ static void send_wifi_list(void)
 
 static void request_wifi_connect(void)
 {
-    bool was_connected = s_wifi_got_ip;
+    bool was_connected = s_wifi_got_ip || s_wifi_connecting;
     s_wifi_connecting = true;
     s_wifi_got_ip = false;
     s_state = BLUFI_DEMO_WIFI_CONNECTING;
+    if (s_reconnect_after_disconnect) return;
     if (was_connected) {
         s_reconnect_after_disconnect = true;
         if (esp_wifi_disconnect() == ESP_OK) return;
         s_reconnect_after_disconnect = false;
     }
+    normalize_sta_config(&s_sta_config);
+    esp_wifi_set_config(WIFI_IF_STA, &s_sta_config);
     esp_err_t err = esp_wifi_connect();
     if (err != ESP_OK) {
         s_error = err;
@@ -120,18 +279,30 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     (void)arg;
     (void)base;
     if (id == WIFI_EVENT_STA_START) {
-        esp_wifi_get_config(WIFI_IF_STA, &s_sta_config);
-        if (s_sta_config.sta.ssid[0] != '\0') {
-            s_wifi_connecting = true;
-            s_state = BLUFI_DEMO_WIFI_CONNECTING;
-            esp_wifi_connect();
-        }
+        start_auto_scan();
     } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *event = data;
         ESP_LOGW(TAG, "Wi-Fi disconnected, reason=%u", event->reason);
         if (s_reconnect_after_disconnect) {
             s_reconnect_after_disconnect = false;
             esp_wifi_connect();
+            return;
+        }
+        if (s_auto_connecting) {
+            bool retryable_auth = event->reason == WIFI_REASON_AUTH_FAIL ||
+                                  event->reason == WIFI_REASON_AUTH_EXPIRE ||
+                                  event->reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+                                  event->reason == WIFI_REASON_HANDSHAKE_TIMEOUT ||
+                                  event->reason == WIFI_REASON_ASSOC_FAIL;
+            if (retryable_auth && s_auto_candidate_retries < 3) {
+                s_auto_candidate_retries++;
+                ESP_LOGW(TAG, "auto Wi-Fi authentication failed; retry %u/3",
+                         (unsigned)s_auto_candidate_retries);
+                esp_wifi_connect();
+                return;
+            }
+            ESP_LOGW(TAG, "auto Wi-Fi candidate failed; trying next visible network");
+            auto_try_next_candidate();
             return;
         }
         if (s_state == BLUFI_DEMO_WIFI_CONNECTING) {
@@ -142,7 +313,12 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_state = s_ble_connected ? BLUFI_DEMO_BLE_CONNECTED : BLUFI_DEMO_ADVERTISING;
         s_ip[0] = '\0';
     } else if (id == WIFI_EVENT_SCAN_DONE) {
-        send_wifi_list();
+        if (s_auto_scan_pending) {
+            s_auto_scan_pending = false;
+            auto_connect_after_scan();
+        } else {
+            send_wifi_list();
+        }
     }
 }
 
@@ -155,7 +331,14 @@ static void ip_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&event->ip_info.ip));
     s_wifi_connecting = false;
     s_wifi_got_ip = true;
+    s_auto_connecting = false;
     s_state = BLUFI_DEMO_WIFI_CONNECTED;
+    esp_err_t persist_err = persist_connected_config();
+    if (persist_err == ESP_OK) {
+        s_saved_config = s_sta_config;
+    } else {
+        ESP_LOGW(TAG, "connected Wi-Fi could not be saved: %s", esp_err_to_name(persist_err));
+    }
     if (!s_sntp_started) {
         esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
         esp_sntp_setservername(0, "pool.ntp.org");
@@ -229,6 +412,7 @@ static void blufi_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *param)
     case ESP_BLUFI_EVENT_RECV_STA_BSSID:
         memcpy(s_sta_config.sta.bssid, param->sta_bssid.bssid, 6);
         s_sta_config.sta.bssid_set = true;
+        normalize_sta_config(&s_sta_config);
         esp_wifi_set_config(WIFI_IF_STA, &s_sta_config);
         break;
     case ESP_BLUFI_EVENT_RECV_STA_SSID:
@@ -253,6 +437,7 @@ static void blufi_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *param)
         memset(s_sta_config.sta.password, 0, sizeof(s_sta_config.sta.password));
         memcpy(s_sta_config.sta.password, param->sta_passwd.passwd,
                param->sta_passwd.passwd_len);
+        normalize_sta_config(&s_sta_config);
         esp_wifi_set_config(WIFI_IF_STA, &s_sta_config);
         break;
     case ESP_BLUFI_EVENT_REQ_CONNECT_TO_AP:
@@ -312,6 +497,10 @@ static esp_err_t wifi_start(void)
     err = esp_wifi_init(&config);
     if (err != ESP_OK) return err;
     s_wifi_initialized = true;
+    err = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "could not disable Wi-Fi power save: %s", esp_err_to_name(err));
+    }
     err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                               wifi_event, NULL, &s_wifi_handler);
     if (err != ESP_OK) return err;
@@ -322,6 +511,12 @@ static esp_err_t wifi_start(void)
     s_ip_handler_registered = true;
     err = esp_wifi_set_storage(WIFI_STORAGE_FLASH);
     if (err == ESP_OK) err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err == ESP_OK) err = esp_wifi_get_config(WIFI_IF_STA, &s_saved_config);
+    if (err == ESP_OK) {
+        normalize_sta_config(&s_saved_config);
+        s_sta_config = s_saved_config;
+    }
+    if (err == ESP_OK) err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
     if (err == ESP_OK) err = esp_wifi_start();
     if (err == ESP_OK) s_wifi_started = true;
     return err;
@@ -351,7 +546,7 @@ static esp_err_t host_start(void)
     return err;
 }
 
-static void demo_stop(void)
+static void host_stop_only(void)
 {
     s_ble_connected = false;
     demo_blufi_security_deinit();
@@ -379,7 +574,7 @@ static void demo_stop(void)
         }
         if (s_btc_initialized) {
             esp_blufi_btc_deinit();
-            s_btc_initialized = false;
+        s_btc_initialized = false;
         }
         s_host_initialized = false;
     }
@@ -387,7 +582,14 @@ static void demo_stop(void)
         vSemaphoreDelete(s_host_stopped);
         s_host_stopped = NULL;
     }
+}
+
+static void demo_stop(void)
+{
+    host_stop_only();
     if (s_wifi_started) {
+        s_auto_scan_pending = false;
+        s_auto_connecting = false;
         esp_wifi_scan_stop();
         esp_wifi_disconnect();
         esp_wifi_stop();
@@ -468,6 +670,8 @@ void demo_blufi_enter(void)
     s_wifi_connecting = false;
     s_wifi_got_ip = false;
     s_reconnect_after_disconnect = false;
+    s_auto_scan_pending = false;
+    s_auto_connecting = false;
     s_state = BLUFI_DEMO_STARTING;
     esp_err_t err = wifi_start();
     if (err == ESP_OK) err = host_start();
@@ -517,6 +721,8 @@ esp_err_t xigua_wifi_start(void)
     s_wifi_connecting = false;
     s_wifi_got_ip = false;
     s_reconnect_after_disconnect = false;
+    s_auto_scan_pending = false;
+    s_auto_connecting = false;
     s_state = BLUFI_DEMO_STARTING;
 
     esp_err_t err = wifi_start();
@@ -533,6 +739,24 @@ esp_err_t xigua_wifi_start(void)
 void xigua_wifi_stop(void)
 {
     demo_stop();
+}
+
+esp_err_t xigua_wifi_release_provisioning(void)
+{
+    if (!s_wifi_started) return ESP_ERR_INVALID_STATE;
+    if (!s_host_initialized) return ESP_OK;
+    host_stop_only();
+    ESP_LOGI(TAG, "BLUFI provisioning released to reclaim heap for TLS");
+    return ESP_OK;
+}
+
+esp_err_t xigua_wifi_resume_provisioning(void)
+{
+    if (!s_wifi_started) return ESP_ERR_INVALID_STATE;
+    if (s_host_initialized) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = host_start();
+    if (err != ESP_OK) ESP_LOGE(TAG, "BLUFI provisioning resume failed: %s", esp_err_to_name(err));
+    return err;
 }
 
 xigua_wifi_state_t xigua_wifi_state(void)
@@ -561,14 +785,67 @@ void xigua_wifi_clear_credentials(void)
     if (!s_wifi_started) return;
     wifi_config_t empty = { 0 };
     s_reconnect_after_disconnect = false;
+    s_auto_scan_pending = false;
+    s_auto_connecting = false;
     esp_wifi_disconnect();
-    if (esp_wifi_set_config(WIFI_IF_STA, &empty) == ESP_OK) {
+    esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &empty);
+    esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (err == ESP_OK) {
         memset(&s_sta_config, 0, sizeof(s_sta_config));
+        memset(&s_saved_config, 0, sizeof(s_saved_config));
         s_wifi_connecting = false;
         s_wifi_got_ip = false;
         s_ip[0] = '\0';
         s_state = s_ble_connected ? BLUFI_DEMO_BLE_CONNECTED : BLUFI_DEMO_ADVERTISING;
     }
+}
+
+esp_err_t xigua_wifi_set_credentials(const char *ssid, const char *password)
+{
+    if (!s_wifi_started || !ssid || !password) return ESP_ERR_INVALID_ARG;
+    size_t ssid_len = strnlen(ssid, sizeof(s_sta_config.sta.ssid));
+    size_t password_len = strnlen(password, sizeof(s_sta_config.sta.password));
+    if (ssid_len == 0 || ssid_len >= sizeof(s_sta_config.sta.ssid) ||
+        password_len >= sizeof(s_sta_config.sta.password)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    wifi_config_t config = { 0 };
+    memcpy(config.sta.ssid, ssid, ssid_len);
+    memcpy(config.sta.password, password, password_len);
+    normalize_sta_config(&config);
+    s_auto_scan_pending = false;
+    s_auto_connecting = false;
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &config);
+    if (err == ESP_OK) {
+        s_sta_config = config;
+    }
+    return err;
+}
+
+esp_err_t xigua_wifi_connect(void)
+{
+    if (!s_wifi_started) return ESP_ERR_INVALID_STATE;
+    request_wifi_connect();
+    return s_state == BLUFI_DEMO_FAILED ? s_error : ESP_OK;
+}
+
+size_t xigua_wifi_builtin_count(void)
+{
+    return XIGUA_WIFI_BUILTIN_COUNT > 3 ? 3 : XIGUA_WIFI_BUILTIN_COUNT;
+}
+
+const char *xigua_wifi_builtin_ssid(size_t index)
+{
+    return index < xigua_wifi_builtin_count() ? s_builtin_ssids[index] : "";
+}
+
+esp_err_t xigua_wifi_connect_builtin(size_t index)
+{
+    if (index >= xigua_wifi_builtin_count()) return ESP_ERR_INVALID_ARG;
+    esp_err_t err = xigua_wifi_set_credentials(s_builtin_ssids[index], s_builtin_passwords[index]);
+    if (err != ESP_OK) return err;
+    return xigua_wifi_connect();
 }
 
 const char *xigua_wifi_device_name(void)

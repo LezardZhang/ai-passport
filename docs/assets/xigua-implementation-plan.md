@@ -236,17 +236,38 @@ Recommended next implementation increment: M0-M1 only, producing a flashable off
 
 This branch now contains the first flashable childcare firmware slice alongside this
 plan. The Chinese three-button application has local feeding, diaper, sleep, bath,
-tummy-time, timer, today, and settings pages. AI actions use a validated JSON
-contract and persist bounded local events. The settings page exposes BLUFI Wi-Fi
-provisioning, timezone selection, brightness, and clearing stored Wi-Fi credentials.
-The firmware starts the BLUFI service on boot, reconnects saved credentials, and
-starts SNTP after an IP address is obtained. The fixed UI glyphs are generated from
-LXGW WenKai and checked against the source inventory.
+tummy-time, timer, today, Wi-Fi setup, and settings pages. Wi-Fi setup is a
+top-level overview item that opens the BLUFI provisioning screen directly. AI actions use a validated JSON
+contract, persist bounded local events, and use a persisted `command_id` to make
+request retries idempotent. New local records expose a five-second undo window
+from the overview page. The settings page also exposes BLUFI Wi-Fi provisioning,
+timezone selection, brightness, and clearing stored Wi-Fi credentials. The
+provisioning screen names the companion mini program and the
+`BLUFI_FoloPassport` device so setup does not depend on guessing which entry to
+select.
+The firmware starts the BLUFI service on boot, scans for Wi-Fi, and first tries the
+last successfully connected network. If it is not visible, it tries visible
+device-local preset networks in order, then waits for manual entry or BLUFI
+provisioning when none is available. It starts SNTP after an IP address is obtained.
+The Wi-Fi page provides a manual soft keyboard with uppercase, lowercase,
+and a combined number/symbol page. UP/DOWN moves the focus, OK selects a key, long
+OK completes a field, and long DOWN cancels. Preset passwords remain compiled into
+the local firmware and are not shown in the UI. The fixed UI glyphs use LXGW WenKai with the built-in Source Han CJK fallback.
+The local build also configures the Xiaomi MiMo OpenAI-compatible endpoint. Its
+background worker sends bounded text requests with `mimo-v2.6-flash`. A voice
+request uses push-to-talk: hold OK to start and release it to finish, up to 60
+seconds. The 16 kHz mono PCM is spooled in chunks to a 2 MB flash temporary
+partition and streamed as a Base64 WAV data URL to `mimo-v2.5-asr`; the
+recognized text then goes to the chat model and the reply is shown on the AI
+page. TTS model IDs remain
+configured for the next output-audio milestone. API keys stay in the ignored
+local credentials header and are never included in the repository template.
 
 ```text
 Build: PASS (ESP-IDF 5.5.3; merged image verified)
 Host tests: PASS (repository checks and firmware-layout tests)
-Device tests: NOT RUN (COM6 was not present when flashing was attempted)
-Unverified: companion-app provisioning, on-device Chinese rendering, Wi-Fi credentials,
-            audio/PTT, real AI service access, latency, power-loss recovery and battery life
+Device tests: PASS (verified merged image flashed to /dev/cu.usbmodem101; boot and
+            automatic Wi-Fi fallback reached 192.168.50.115 and started SNTP)
+Unverified: on-device AI request interaction, companion-app provisioning, Chinese
+            rendering, audio/PTT, latency, power-loss recovery and battery life
 ```

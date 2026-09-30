@@ -213,6 +213,7 @@ provide reference material. Choose the entry that matches your task.
 | [Community projects and experience](reference/README.md) | Playbooks and reusable knowledge under `docs/reference/<username>/` |
 | [Xigua Assistant proposal](assets/xigua-implementation-plan.md) | Fork-specific childcare assistant scope, architecture, milestones, and acceptance |
 | [Xigua UI design](assets/xigua-ui-design.md) | Page responsibilities, record flows, three-button actions, and service handoff |
+| [Xigua project handoff](assets/xigua-project-handoff.md) | Current implementation, verification evidence, open issues, and takeover steps |
 | [Contributing](contribution/README.md) | Documentation, commits, and pull-request conventions |
 | [Brand assets](brand/README.md) | Product visual references and [brand language](brand/brand-and-product.md) |
 | [Fork guide](fork-guide.md) · [Changelog](CHANGELOG.md) | Downstream workflows and release history |

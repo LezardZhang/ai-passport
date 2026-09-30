@@ -3,6 +3,7 @@
 #include "bsp_battery.h"
 #include "bsp_display.h"
 #include "xigua_wifi.h"
+#include "xigua_ai.h"
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -24,6 +25,11 @@
 #include <time.h>
 
 extern const lv_font_t xigua_font_zh16;
+extern const lv_font_t xigua_font_zh20;
+extern const lv_font_t lv_font_source_han_sans_sc_16_cjk;
+static lv_font_t s_xigua_font;
+static lv_font_t s_xigua_font20;
+static bool s_xigua_font_ready;
 
 static const char *TAG = "xigua_app";
 
@@ -41,6 +47,19 @@ typedef enum {
     X_PAGE_SETTINGS,
     X_PAGE_WIFI,
 } x_page_t;
+
+typedef enum {
+    X_WIFI_UI_MENU = 0,
+    X_WIFI_UI_STATUS,
+    X_WIFI_UI_EDIT_SSID,
+    X_WIFI_UI_EDIT_PASSWORD,
+} x_wifi_ui_mode_t;
+
+typedef enum {
+    X_WIFI_KEY_UPPER = 0,
+    X_WIFI_KEY_LOWER,
+    X_WIFI_KEY_DIGIT_SYMBOL,
+} x_wifi_keyboard_mode_t;
 
 typedef enum {
     X_ACTIVE_NONE = 0,
@@ -131,6 +150,18 @@ typedef struct {
     bool active_time_known;
 } x_state_t;
 
+#define X_UNDO_WINDOW_US 5000000LL
+#define X_COMMAND_ID_MAX 40
+#define X_MIN_VALID_EPOCH 1700000000LL
+
+typedef struct {
+    x_persisted_t data;
+    int64_t active_started_us;
+    int64_t expires_us;
+    bool active_time_known;
+    bool valid;
+} x_undo_t;
+
 static const uint32_t X_STATE_MAGIC = 0x58494741U;
 static const char *X_NVS_NAMESPACE = "xigua";
 
@@ -157,6 +188,24 @@ static uint8_t s_ai_mode;
 static bool s_running;
 static char s_feedback[64];
 static char s_ai_reply[192];
+static bool s_ai_request_pending;
+static char s_last_command_id[X_COMMAND_ID_MAX];
+static x_undo_t s_undo;
+static x_wifi_ui_mode_t s_wifi_ui_mode = X_WIFI_UI_MENU;
+static char s_wifi_input_ssid[33];
+static char s_wifi_input_password[65];
+static size_t s_wifi_input_len;
+static x_wifi_keyboard_mode_t s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
+static size_t s_wifi_keyboard_index;
+
+static const char *const WIFI_KEYBOARD_CHARS[] = {
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "abcdefghijklmnopqrstuvwxyz",
+    "0123456789 !@#$%^&*()-_=+[]{};:'\\\",.<>/?\\|`~",
+};
+static const char *const WIFI_KEYBOARD_ACTIONS[] = {
+    "大写", "小写", "数字/符号", "退格", "确认",
+};
 
 static const uint16_t TIMER_OPTIONS[] = { 5, 10, 20, 30 };
 static const char *const TIMEZONE_NAMES[] = {
@@ -176,6 +225,11 @@ static bool valid_timer_minutes(uint16_t minutes)
         if (minutes == TIMER_OPTIONS[i]) return true;
     }
     return false;
+}
+
+static bool wall_clock_known(void)
+{
+    return time(NULL) >= X_MIN_VALID_EPOCH;
 }
 
 static void state_defaults(void)
@@ -198,16 +252,79 @@ static void apply_timezone(void)
     tzset();
 }
 
-static void state_save(void)
+static esp_err_t state_save_command_id(const char *command_id)
 {
-    if (!s_nvs_open || !s_mutex) return;
+    if (!s_nvs_open || !s_mutex) return ESP_ERR_INVALID_STATE;
     x_persisted_t data;
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return ESP_ERR_TIMEOUT;
     data = s_state.data;
     xSemaphoreGive(s_mutex);
     esp_err_t err = nvs_set_blob(s_nvs, "state", &data, sizeof(data));
+    if (err == ESP_OK && command_id && command_id[0] != '\0') {
+        err = nvs_set_str(s_nvs, "last_cmd_id", command_id);
+    }
     if (err == ESP_OK) err = nvs_commit(s_nvs);
     if (err != ESP_OK) ESP_LOGW(TAG, "state save failed: %s", esp_err_to_name(err));
+    return err;
+}
+
+static void state_save(void)
+{
+    (void)state_save_command_id(NULL);
+}
+
+static void load_last_command_id(void)
+{
+    s_last_command_id[0] = '\0';
+    if (!s_nvs_open) return;
+    size_t size = sizeof(s_last_command_id);
+    if (nvs_get_str(s_nvs, "last_cmd_id", s_last_command_id, &size) != ESP_OK ||
+        size == 0 || size > sizeof(s_last_command_id)) {
+        s_last_command_id[0] = '\0';
+    }
+}
+
+static bool undo_available(void)
+{
+    if (!s_undo.valid) return false;
+    if (esp_timer_get_time() >= s_undo.expires_us) {
+        s_undo.valid = false;
+        return false;
+    }
+    return true;
+}
+
+static void undo_capture_locked(void)
+{
+    s_undo.data = s_state.data;
+    s_undo.active_started_us = s_state.active_started_us;
+    s_undo.active_time_known = s_state.active_time_known;
+    s_undo.expires_us = esp_timer_get_time() + X_UNDO_WINDOW_US;
+    s_undo.valid = true;
+}
+
+static void undo_clear(void)
+{
+    s_undo.valid = false;
+    s_undo.expires_us = 0;
+}
+
+static bool undo_last(void)
+{
+    if (!undo_available() || !s_mutex) return false;
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return false;
+    if (!undo_available()) {
+        xSemaphoreGive(s_mutex);
+        return false;
+    }
+    s_state.data = s_undo.data;
+    s_state.active_started_us = s_undo.active_started_us;
+    s_state.active_time_known = s_undo.active_time_known;
+    xSemaphoreGive(s_mutex);
+    state_save();
+    undo_clear();
+    snprintf(s_feedback, sizeof(s_feedback), "最近记录已撤销");
+    return true;
 }
 
 static void append_event_locked(x_event_type_t type, uint16_t amount,
@@ -229,7 +346,9 @@ static void append_event_locked(x_event_type_t type, uint16_t amount,
 
 static void event_totals(const x_persisted_t *data, uint16_t *feed_count,
                          uint32_t *milk_ml, uint16_t *pee, uint16_t *poop,
-                         uint16_t *sleep_count, uint16_t *sleep_minutes)
+                         uint16_t *sleep_count, uint16_t *sleep_minutes,
+                         uint16_t *bath_count, uint16_t *tummy_count,
+                         uint16_t *timer_count)
 {
     *feed_count = 0;
     *milk_ml = 0;
@@ -237,18 +356,20 @@ static void event_totals(const x_persisted_t *data, uint16_t *feed_count,
     *poop = 0;
     *sleep_count = 0;
     *sleep_minutes = 0;
+    *bath_count = 0;
+    *tummy_count = 0;
+    *timer_count = 0;
     time_t now = time(NULL);
     struct tm today = { 0 };
-    bool have_today = now >= 1700000000 && localtime_r(&now, &today) != NULL;
+    bool have_today = now >= X_MIN_VALID_EPOCH && localtime_r(&now, &today) != NULL;
     for (uint8_t i = 0; i < data->event_count; i++) {
         const x_event_t *event = &data->events[i];
-        if (have_today && event->epoch >= 1700000000) {
-            time_t event_time = (time_t)event->epoch;
-            struct tm event_day = { 0 };
-            if (localtime_r(&event_time, &event_day) != NULL &&
-                (event_day.tm_year != today.tm_year || event_day.tm_yday != today.tm_yday)) {
-                continue;
-            }
+        if (!have_today || event->epoch < X_MIN_VALID_EPOCH) continue;
+        time_t event_time = (time_t)event->epoch;
+        struct tm event_day = { 0 };
+        if (localtime_r(&event_time, &event_day) != NULL &&
+            (event_day.tm_year != today.tm_year || event_day.tm_yday != today.tm_yday)) {
+            continue;
         }
         switch ((x_event_type_t)event->type) {
         case X_EVENT_FEED:
@@ -261,16 +382,22 @@ static void event_totals(const x_persisted_t *data, uint16_t *feed_count,
             (*sleep_count)++;
             *sleep_minutes += event->duration_min;
             break;
+        case X_EVENT_BATH: (*bath_count)++; break;
+        case X_EVENT_TUMMY: (*tummy_count)++; break;
+        case X_EVENT_TIMER: (*timer_count)++; break;
         default: break;
         }
     }
-    if (data->event_count == 0) {
+    if (data->event_count == 0 && have_today) {
         *feed_count = data->milk_count;
         *milk_ml = (uint32_t)data->milk_count * data->milk_ml;
         *pee = data->pee_count;
         *poop = data->poop_count;
         *sleep_count = data->sleep_count;
         *sleep_minutes = data->sleep_minutes;
+        *bath_count = data->bath_count;
+        *tummy_count = data->tummy_count;
+        *timer_count = data->timer_count;
     }
 }
 
@@ -454,6 +581,141 @@ static const char *wifi_state_name(xigua_wifi_state_t state)
     }
 }
 
+static const char *ai_health_name(xigua_ai_health_t health)
+{
+    switch (health) {
+    case XIGUA_AI_HEALTH_CHECKING: return "自检中";
+    case XIGUA_AI_HEALTH_NETWORK_FAILED: return "网络不可用";
+    case XIGUA_AI_HEALTH_MODEL_FAILED: return "模型不可用";
+    case XIGUA_AI_HEALTH_READY: return "网络和模型正常";
+    default: return "等待联网";
+    }
+}
+
+static void wifi_ui_clear_input(void)
+{
+    memset(s_wifi_input_ssid, 0, sizeof(s_wifi_input_ssid));
+    memset(s_wifi_input_password, 0, sizeof(s_wifi_input_password));
+    s_wifi_input_len = 0;
+    s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
+    s_wifi_keyboard_index = 0;
+}
+
+static void wifi_ui_enter_menu(void)
+{
+    wifi_ui_clear_input();
+    s_wifi_ui_mode = X_WIFI_UI_MENU;
+    s_focus = 0;
+}
+
+static void wifi_ui_begin_edit(bool password)
+{
+    s_wifi_ui_mode = password ? X_WIFI_UI_EDIT_PASSWORD : X_WIFI_UI_EDIT_SSID;
+    s_wifi_input_len = 0;
+    s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
+    s_wifi_keyboard_index = 0;
+    if (password) memset(s_wifi_input_password, 0, sizeof(s_wifi_input_password));
+    else memset(s_wifi_input_ssid, 0, sizeof(s_wifi_input_ssid));
+}
+
+static const char *wifi_keyboard_chars(void)
+{
+    return WIFI_KEYBOARD_CHARS[s_wifi_keyboard_mode];
+}
+
+static size_t wifi_keyboard_item_count(void)
+{
+    return strlen(wifi_keyboard_chars()) + sizeof(WIFI_KEYBOARD_ACTIONS) /
+        sizeof(WIFI_KEYBOARD_ACTIONS[0]);
+}
+
+static void wifi_ui_move_key(int delta)
+{
+    int next = (int)s_wifi_keyboard_index + delta;
+    int count = (int)wifi_keyboard_item_count();
+    if (next < 0) next = count - 1;
+    if (next >= count) next = 0;
+    s_wifi_keyboard_index = (size_t)next;
+}
+
+static void wifi_ui_append_char(char value)
+{
+    size_t limit = s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ?
+        sizeof(s_wifi_input_ssid) - 1 : sizeof(s_wifi_input_password) - 1;
+    if (s_wifi_input_len >= limit) {
+        snprintf(s_feedback, sizeof(s_feedback), "已达到长度上限");
+        return;
+    }
+    char *buffer = s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ?
+        s_wifi_input_ssid : s_wifi_input_password;
+    buffer[s_wifi_input_len++] = value;
+    buffer[s_wifi_input_len] = '\0';
+}
+
+static void wifi_ui_backspace(void)
+{
+    char *buffer = s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ?
+        s_wifi_input_ssid : s_wifi_input_password;
+    if (s_wifi_input_len == 0) return;
+    buffer[--s_wifi_input_len] = '\0';
+}
+
+static void wifi_ui_finish_edit(void)
+{
+    if (s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID) {
+        if (s_wifi_input_len == 0) {
+            snprintf(s_feedback, sizeof(s_feedback), "SSID不能为空");
+            return;
+        }
+        s_wifi_ui_mode = X_WIFI_UI_EDIT_PASSWORD;
+        s_wifi_input_len = 0;
+        s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
+        s_wifi_keyboard_index = 0;
+        memset(s_wifi_input_password, 0, sizeof(s_wifi_input_password));
+        snprintf(s_feedback, sizeof(s_feedback), "请输入密码，开放网络可直接长按确认");
+        return;
+    }
+    esp_err_t err = xigua_wifi_set_credentials(s_wifi_input_ssid, s_wifi_input_password);
+    if (err == ESP_OK) err = xigua_wifi_connect();
+    s_wifi_ui_mode = X_WIFI_UI_STATUS;
+    if (err == ESP_OK) snprintf(s_feedback, sizeof(s_feedback), "正在连接手动输入的 Wi-Fi");
+    else snprintf(s_feedback, sizeof(s_feedback), "连接启动失败：%s", esp_err_to_name(err));
+    memset(s_wifi_input_password, 0, sizeof(s_wifi_input_password));
+}
+
+static void wifi_ui_choose_key(void)
+{
+    const char *chars = wifi_keyboard_chars();
+    size_t char_count = strlen(chars);
+    if (s_wifi_keyboard_index < char_count) {
+        wifi_ui_append_char(chars[s_wifi_keyboard_index]);
+        return;
+    }
+    size_t action = s_wifi_keyboard_index - char_count;
+    switch (action) {
+    case 0:
+        s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
+        s_wifi_keyboard_index = 0;
+        break;
+    case 1:
+        s_wifi_keyboard_mode = X_WIFI_KEY_LOWER;
+        s_wifi_keyboard_index = 0;
+        break;
+    case 2:
+        s_wifi_keyboard_mode = X_WIFI_KEY_DIGIT_SYMBOL;
+        s_wifi_keyboard_index = 0;
+        break;
+    case 3:
+        wifi_ui_backspace();
+        break;
+    case 4:
+        wifi_ui_finish_edit();
+        break;
+    default:
+        break;
+    }
+}
+
 static const char *format_clock(int64_t epoch, char *out, size_t size)
 {
     if (epoch < 1700000000LL) {
@@ -483,8 +745,9 @@ static void format_elapsed(int64_t started_us, char *out, size_t size)
 static void ui_label_style(lv_obj_t *label, uint32_t color, uint16_t size)
 {
     lv_obj_set_style_text_color(label, lv_color_hex(color), LV_PART_MAIN);
-    (void)size;
-    lv_obj_set_style_text_font(label, &xigua_font_zh16, LV_PART_MAIN);
+    const lv_font_t *font = size >= 18 ? &s_xigua_font20 : &s_xigua_font;
+    lv_obj_set_style_text_font(label, s_xigua_font_ready ? font : &xigua_font_zh16,
+                               LV_PART_MAIN);
 }
 
 static lv_obj_t *make_label(lv_obj_t *parent, int x, int y, int w, int h,
@@ -523,6 +786,52 @@ static void ui_set_hint(const char *hint)
     if (s_hint) lv_label_set_text(s_hint, hint);
 }
 
+static bool ai_request_current_mode(void)
+{
+    if (!xigua_ai_configured()) {
+        snprintf(s_feedback, sizeof(s_feedback), "AI 尚未配置");
+        return false;
+    }
+    if (s_ai_request_pending) {
+        snprintf(s_feedback, sizeof(s_feedback), "Mimo 请求进行中");
+        return false;
+    }
+
+    const char *prompt = s_ai_mode == 0 ?
+        "请用一句简短中文确认育儿 AI 服务已经连接。" :
+        "请用两句简短中文讲一个适合幼儿的睡前故事开头。";
+    if (xigua_ai_request_text(prompt) != ESP_OK) {
+        snprintf(s_feedback, sizeof(s_feedback), "Mimo 请求失败");
+        return false;
+    }
+    s_ai_request_pending = true;
+    snprintf(s_feedback, sizeof(s_feedback), "正在请求 Mimo");
+    return true;
+}
+
+static bool ai_request_voice_current_mode(void)
+{
+    if (!xigua_ai_configured()) {
+        snprintf(s_feedback, sizeof(s_feedback), "AI 尚未配置");
+        return false;
+    }
+    if (s_ai_request_pending) {
+        snprintf(s_feedback, sizeof(s_feedback), "语音请求进行中");
+        return false;
+    }
+    if (xigua_wifi_state() != XIGUA_WIFI_CONNECTED) {
+        snprintf(s_feedback, sizeof(s_feedback), "Wi-Fi未连接，请先完成配网");
+        return false;
+    }
+    if (xigua_ai_request_voice() != ESP_OK) {
+        snprintf(s_feedback, sizeof(s_feedback), "录音启动失败");
+        return false;
+    }
+    s_ai_request_pending = true;
+    snprintf(s_feedback, sizeof(s_feedback), "正在录音，松开确认键结束（最长60秒）");
+    return true;
+}
+
 static void ui_refresh_page(void)
 {
     if (!s_body || !s_mutex) return;
@@ -537,16 +846,18 @@ static void ui_refresh_page(void)
     char wifi_ssid[33];
     char wifi_ip[16];
     uint16_t feed_count, pee_count, poop_count, sleep_count, sleep_minutes;
+    uint16_t bath_count, tummy_count, timer_count;
     uint32_t milk_total;
     event_totals(&snapshot.data, &feed_count, &milk_total, &pee_count, &poop_count,
-                 &sleep_count, &sleep_minutes);
+                 &sleep_count, &sleep_minutes, &bath_count, &tummy_count,
+                 &timer_count);
     xigua_wifi_status(wifi_ssid, sizeof(wifi_ssid), wifi_ip, sizeof(wifi_ip));
     switch (s_page) {
     case X_PAGE_OVERVIEW:
         ui_set_title("西瓜助手");
         {
             static const char *const HOME_ITEMS[] = {
-                "AI助手", "手动记录", "今天", "睡眠", "声音", "设置"
+                "AI助手", "手动记录", "今天", "睡眠", "声音", "Wi-Fi配网", "设置"
             };
             snprintf(text, sizeof(text), "> %s\n\n奶量 %u 毫升（%u 次）\n睡眠 %u 次  尿便 %u 次\n进行中：%s",
                  HOME_ITEMS[s_focus],
@@ -608,12 +919,12 @@ static void ui_refresh_page(void)
         snprintf(text, sizeof(text), "%s\n\n长按确认键说话\n%s",
                  s_ai_mode == 0 ? "问答/记录" : "讲故事/语音",
                  s_ai_reply[0] ? s_ai_reply : "可记录喂养、尿便、睡眠等事项");
-        ui_set_hint("上/下切换模式  长按确认键说话  长按下键返回");
+        ui_set_hint("上/下切换模式  确认键文字请求  长按后松开结束录音");
         break;
     case X_PAGE_STORY:
         ui_set_title("讲故事");
-        snprintf(text, sizeof(text), "说出故事要求\n\n长按确认键说话\n回复将使用语音播放");
-        ui_set_hint("长按确认键输入  确认键播放/暂停  长按下键取消");
+        snprintf(text, sizeof(text), "故事模式\n\n长按确认键说话\n回复将显示在此处");
+        ui_set_hint("长按确认说话  松开结束录音  长按下键返回");
         break;
     case X_PAGE_SOUND:
         ui_set_title("儿歌/白噪音");
@@ -623,38 +934,98 @@ static void ui_refresh_page(void)
         break;
     case X_PAGE_TODAY:
         ui_set_title("今天");
-        snprintf(text, sizeof(text), "喂养 %u 次（%lu 毫升）\n睡眠 %u 次（%u 分钟）\n尿 %u  便 %u\n洗澡 %u\n趴玩 %u\n计时 %u",
-                 feed_count, (unsigned long)milk_total,
-                 sleep_count, sleep_minutes,
-                 pee_count, poop_count,
-                 snapshot.data.bath_count, snapshot.data.tummy_count,
-                 snapshot.data.timer_count);
+        if (!wall_clock_known()) {
+            snprintf(text, sizeof(text), "时间待校准\n\n校时后显示今日统计\n本地记录仍可继续保存");
+        } else {
+            snprintf(text, sizeof(text), "喂养 %u 次（%lu 毫升）\n睡眠 %u 次（%u 分钟）\n尿 %u  便 %u\n洗澡 %u\n趴玩 %u\n计时 %u",
+                     feed_count, (unsigned long)milk_total,
+                     sleep_count, sleep_minutes,
+                     pee_count, poop_count,
+                     bath_count, tummy_count, timer_count);
+        }
         ui_set_hint("上/下查看  长按下键返回");
         break;
     case X_PAGE_SETTINGS:
         ui_set_title("设置");
-        snprintf(text, sizeof(text), "%c Wi-Fi配网：%s\n%c 时区：%s\n%c 亮度：%u%%\n%c 清除Wi-Fi",
+        snprintf(text, sizeof(text), "%c Wi-Fi配网：%s\n  自检：%s\n%c 时区：%s\n%c 亮度：%u%%\n%c 清除Wi-Fi",
                  s_focus == 0 ? '>' : ' ', wifi_state_name(xigua_wifi_state()),
+                 ai_health_name(xigua_ai_health()),
                  s_focus == 1 ? '>' : ' ', TIMEZONE_NAMES[snapshot.data.timezone_index],
                  s_focus == 2 ? '>' : ' ', snapshot.data.brightness,
                  s_focus == 3 ? '>' : ' ');
         ui_set_hint("上/下选择  确认键进入/修改  长按下键返回");
         break;
     case X_PAGE_WIFI:
-        ui_set_title("Wi-Fi配网");
-        if (xigua_wifi_state() == XIGUA_WIFI_CONNECTED) {
-            snprintf(text, sizeof(text), "已连接\n\nSSID：%s\nIP：%s", wifi_ssid, wifi_ip);
-        } else if (xigua_wifi_state() == XIGUA_WIFI_BLE_CONNECTED) {
-            snprintf(text, sizeof(text), "手机已连接\n\n请在配网小程序中选择\n%s", xigua_wifi_device_name());
-        } else if (xigua_wifi_state() == XIGUA_WIFI_ADVERTISING) {
-            snprintf(text, sizeof(text), "等待配网\n\n打开蓝牙配网小程序\n设备：%s", xigua_wifi_device_name());
+        if (s_wifi_ui_mode == X_WIFI_UI_MENU) {
+            const size_t item_count = 2;
+            ui_set_title("Wi-Fi设置");
+            int used = snprintf(text, sizeof(text), "状态：%s\n自检：%s\n\n",
+                                wifi_state_name(xigua_wifi_state()),
+                                ai_health_name(xigua_ai_health()));
+            const char *labels[] = { "手动输入 Wi-Fi", "蓝牙配网" };
+            for (size_t i = 0; i < item_count && used > 0 && (size_t)used < sizeof(text); i++) {
+                used += snprintf(text + used, sizeof(text) - (size_t)used, "%c %s\n",
+                                 s_focus == i ? '>' : ' ', labels[i]);
+            }
+            ui_set_hint("上/下选择  确认键进入  长按下键返回");
+        } else if (s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ||
+                   s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
+            bool password = s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD;
+            const char *value = password ? s_wifi_input_password : s_wifi_input_ssid;
+            char masked[65] = { 0 };
+            if (password) {
+                for (size_t i = 0; i < s_wifi_input_len && i + 1 < sizeof(masked); i++) {
+                    masked[i] = '*';
+                }
+                masked[s_wifi_input_len] = '\0';
+                value = masked;
+            }
+            const char *keys = wifi_keyboard_chars();
+            size_t key_count = strlen(keys);
+            size_t action_count = sizeof(WIFI_KEYBOARD_ACTIONS) /
+                sizeof(WIFI_KEYBOARD_ACTIONS[0]);
+            size_t selected_action = s_wifi_keyboard_index >= key_count ?
+                s_wifi_keyboard_index - key_count : SIZE_MAX;
+            ui_set_title(password ? "输入 Wi-Fi 密码" : "输入 Wi-Fi 名称");
+            int used = snprintf(text, sizeof(text), "%s\n已输入：%s\n",
+                                password ? "密码" : "SSID", value[0] ? value : "(空)");
+            for (size_t i = 0; i < key_count && used > 0 && (size_t)used < sizeof(text); i++) {
+                used += snprintf(text + used, sizeof(text) - (size_t)used, "%c%c ",
+                                 s_wifi_keyboard_index == i ? '[' : ' ', keys[i]);
+                if (i % 6 == 5) used += snprintf(text + used, sizeof(text) - (size_t)used, "\n");
+            }
+            if (used > 0 && (size_t)used < sizeof(text)) {
+                used += snprintf(text + used, sizeof(text) - (size_t)used, "\n");
+            }
+            for (size_t i = 0; i < action_count && used > 0 && (size_t)used < sizeof(text); i++) {
+                used += snprintf(text + used, sizeof(text) - (size_t)used, "%c%s%c ",
+                                 selected_action == i ? '[' : ' ', WIFI_KEYBOARD_ACTIONS[i],
+                                 selected_action == i ? ']' : ' ');
+            }
+            if (used > 0 && (size_t)used < sizeof(text)) {
+                snprintf(text + used, sizeof(text) - (size_t)used, "\n长度：%u/%u",
+                         (unsigned)s_wifi_input_len, (unsigned)(password ? 64 : 32));
+            }
+            ui_set_hint("上/下移动键盘  确认键选择  长按确认完成  长按下键取消");
         } else {
-            snprintf(text, sizeof(text), "%s\n\nSSID：%s\nIP：%s",
-                     wifi_state_name(xigua_wifi_state()), wifi_ssid[0] ? wifi_ssid : "--",
-                     wifi_ip[0] ? wifi_ip : "--");
+            ui_set_title("Wi-Fi状态");
+            if (xigua_wifi_state() == XIGUA_WIFI_CONNECTED) {
+                snprintf(text, sizeof(text), "已连接\n\nSSID：%s\nIP：%s", wifi_ssid, wifi_ip);
+            } else if (xigua_wifi_state() == XIGUA_WIFI_BLE_CONNECTED) {
+                snprintf(text, sizeof(text), "手机已连接\n\n请在配网小程序中选择\n%s", xigua_wifi_device_name());
+            } else if (xigua_wifi_state() == XIGUA_WIFI_ADVERTISING) {
+                snprintf(text, sizeof(text), "等待配网\n\n打开小程序：\n蓝牙配网-FoloToy\nAI PASSPORT\n设备：%s", xigua_wifi_device_name());
+            } else {
+                snprintf(text, sizeof(text), "%s\n\nSSID：%s\nIP：%s",
+                         wifi_state_name(xigua_wifi_state()), wifi_ssid[0] ? wifi_ssid : "--",
+                         wifi_ip[0] ? wifi_ip : "--");
+            }
+            ui_set_hint("确认返回 Wi-Fi 设置  长按下键返回设置");
         }
-        ui_set_hint("上/下刷新  长按下键返回设置");
         break;
+    }
+    if (s_page == X_PAGE_OVERVIEW && undo_available()) {
+        ui_set_hint("确认键撤销最近记录  上/下选择");
     }
     lv_label_set_text(s_body, text);
     if (snapshot.battery_soc >= 0) lv_label_set_text_fmt(s_battery, "%d%%", snapshot.battery_soc);
@@ -664,7 +1035,38 @@ static void ui_refresh_page(void)
 static void ui_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
+    bool had_undo = s_undo.valid;
+    bool undo_still_available = undo_available();
     if (s_page == X_PAGE_ACTIVE && !s_confirm_abort) ui_refresh_page();
+    else if (had_undo && !undo_still_available && s_page == X_PAGE_OVERVIEW) ui_refresh_page();
+    else if (s_page == X_PAGE_SETTINGS ||
+             (s_page == X_PAGE_WIFI && (s_wifi_ui_mode == X_WIFI_UI_STATUS ||
+                                        s_wifi_ui_mode == X_WIFI_UI_MENU))) ui_refresh_page();
+    if (s_ai_request_pending && (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY)) {
+        switch (xigua_ai_voice_phase()) {
+        case XIGUA_AI_VOICE_RECORDING:
+            snprintf(s_feedback, sizeof(s_feedback), "正在录音，松开确认键结束（最长60秒）");
+            break;
+        case XIGUA_AI_VOICE_TRANSCRIBING:
+            snprintf(s_feedback, sizeof(s_feedback), "正在识别语音");
+            break;
+        case XIGUA_AI_VOICE_THINKING:
+            snprintf(s_feedback, sizeof(s_feedback), "正在请求 Mimo");
+            break;
+        default:
+            break;
+        }
+        ui_refresh_page();
+    }
+    char ai_text[192];
+    esp_err_t ai_error = ESP_FAIL;
+    if (xigua_ai_take_text(ai_text, sizeof(ai_text), &ai_error)) {
+        s_ai_request_pending = false;
+        if (ai_error == ESP_OK) snprintf(s_ai_reply, sizeof(s_ai_reply), "%s", ai_text);
+        else snprintf(s_ai_reply, sizeof(s_ai_reply), "Mimo 请求失败：%s", esp_err_to_name(ai_error));
+        snprintf(s_feedback, sizeof(s_feedback), ai_error == ESP_OK ? "Mimo 回复已收到" : "Mimo 请求失败");
+        if (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) ui_refresh_page();
+    }
 }
 
 static void go_page(x_page_t page, size_t focus)
@@ -687,6 +1089,7 @@ static void save_simple_record(x_active_t active)
 {
     if (!s_mutex) return;
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    undo_capture_locked();
     if (active == X_ACTIVE_NONE) s_state.data.diaper_count++;
     else if (active == X_ACTIVE_BATH) s_state.data.bath_count++;
     else if (active == X_ACTIVE_TUMMY) s_state.data.tummy_count++;
@@ -695,12 +1098,18 @@ static void save_simple_record(x_active_t active)
     s_state.data.magic = X_STATE_MAGIC;
     xSemaphoreGive(s_mutex);
     state_save();
+    if (active == X_ACTIVE_BATH) {
+        snprintf(s_feedback, sizeof(s_feedback), "洗澡已记录，5秒内按确认键撤销");
+    } else if (active == X_ACTIVE_TUMMY) {
+        snprintf(s_feedback, sizeof(s_feedback), "趴玩已记录，5秒内按确认键撤销");
+    }
 }
 
 static void save_diaper(bool poop)
 {
     if (!s_mutex) return;
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    undo_capture_locked();
     s_state.data.diaper_count++;
     if (poop) s_state.data.poop_count++;
     else s_state.data.pee_count++;
@@ -708,13 +1117,14 @@ static void save_diaper(bool poop)
     append_event_locked(poop ? X_EVENT_POOP : X_EVENT_PEE, 0, 0, 0, s_state.data.last_diaper_epoch);
     xSemaphoreGive(s_mutex);
     state_save();
-    snprintf(s_feedback, sizeof(s_feedback), "%s已记录", poop ? "便" : "尿");
+    snprintf(s_feedback, sizeof(s_feedback), "%s已记录，5秒内按确认键撤销", poop ? "便" : "尿");
 }
 
 static void start_active(x_active_t active)
 {
     if (!s_mutex) return;
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    undo_clear();
     s_state.data.active = active;
     if (active == X_ACTIVE_SLEEP) s_state.data.sleep_start_epoch = (int64_t)time(NULL);
     s_state.active_started_us = esp_timer_get_time();
@@ -728,6 +1138,7 @@ static void finish_active(void)
 {
     if (!s_mutex) return;
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    undo_capture_locked();
     x_active_t active = (x_active_t)s_state.data.active;
     int64_t elapsed = s_state.active_time_known ?
         (esp_timer_get_time() - s_state.active_started_us) / 60000000 : 0;
@@ -748,12 +1159,14 @@ static void finish_active(void)
     s_state.active_time_known = false;
     xSemaphoreGive(s_mutex);
     state_save();
+    snprintf(s_feedback, sizeof(s_feedback), "%s已保存，5秒内按确认键撤销", active_name(active));
 }
 
 static void save_feed(void)
 {
     if (!s_mutex) return;
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    undo_capture_locked();
     s_state.data.milk_ml = (uint16_t)s_feed_ml;
     s_state.data.milk_count++;
     s_state.data.milk_ingredient = (uint8_t)s_feed_ingredient;
@@ -762,10 +1175,18 @@ static void save_feed(void)
                         s_state.data.last_milk_epoch);
     xSemaphoreGive(s_mutex);
     state_save();
+    snprintf(s_feedback, sizeof(s_feedback), "喂养已记录，5秒内按确认键撤销");
 }
 
 void xigua_app_enter(void)
 {
+    if (!s_xigua_font_ready) {
+        s_xigua_font = xigua_font_zh16;
+        s_xigua_font.fallback = &lv_font_source_han_sans_sc_16_cjk;
+        s_xigua_font20 = xigua_font_zh20;
+        s_xigua_font20.fallback = &lv_font_source_han_sans_sc_16_cjk;
+        s_xigua_font_ready = true;
+    }
     ui_shell();
     s_timer = lv_timer_create(ui_timer_cb, 1000, NULL);
     ui_refresh_page();
@@ -798,6 +1219,7 @@ esp_err_t xigua_app_start(void)
     if (err != ESP_OK) return err;
     s_nvs_open = true;
     state_load();
+    load_last_command_id();
     apply_timezone();
     s_state.battery_soc = bsp_battery_soc();
     bsp_display_backlight(s_state.data.brightness);
@@ -805,17 +1227,20 @@ esp_err_t xigua_app_start(void)
     s_feed_ingredient = s_state.data.milk_ingredient;
     s_timer_focus = 0;
     s_focus = 0;
+    undo_clear();
     s_feedback[0] = '\0';
     s_running = true;
     if (xigua_wifi_start() != ESP_OK) {
         snprintf(s_feedback, sizeof(s_feedback), "Wi-Fi启动失败");
     }
+    if (xigua_ai_start() != ESP_OK) snprintf(s_feedback, sizeof(s_feedback), "AI服务启动失败");
     return ESP_OK;
 }
 
 esp_err_t xigua_app_stop(void)
 {
     s_running = false;
+    xigua_ai_stop();
     xigua_wifi_stop();
     if (s_nvs_open) {
         nvs_close(s_nvs);
@@ -834,20 +1259,47 @@ esp_err_t xigua_app_ai_response(const char *json)
     }
 
     bool applied = false;
+    bool duplicate_command = false;
+    bool has_command_id = false;
+    char command_id[X_COMMAND_ID_MAX] = { 0 };
+    cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command_id");
+    if (cJSON_IsString(command) && command->valuestring && command->valuestring[0] != '\0') {
+        size_t command_len = strlen(command->valuestring);
+        if (command_len >= sizeof(command_id)) {
+            cJSON_Delete(root);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        memcpy(command_id, command->valuestring, command_len + 1);
+        has_command_id = true;
+    }
     cJSON *actions = cJSON_GetObjectItemCaseSensitive(root, "actions");
     if (!actions) actions = cJSON_GetObjectItemCaseSensitive(root, "action");
+    x_undo_t undo_before = s_undo;
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(300)) == pdTRUE) {
-        if (cJSON_IsArray(actions)) {
-            cJSON *action = NULL;
-            cJSON_ArrayForEach(action, actions) {
-                if (cJSON_IsObject(action) && apply_ai_action_locked(action)) applied = true;
+        duplicate_command = has_command_id &&
+            strcmp(s_last_command_id, command_id) == 0;
+        if (!duplicate_command) {
+            if (cJSON_IsArray(actions) || cJSON_IsObject(actions)) undo_capture_locked();
+            if (cJSON_IsArray(actions)) {
+                cJSON *action = NULL;
+                cJSON_ArrayForEach(action, actions) {
+                    if (cJSON_IsObject(action) && apply_ai_action_locked(action)) applied = true;
+                }
+            } else if (cJSON_IsObject(actions)) {
+                applied = apply_ai_action_locked(actions);
             }
-        } else if (cJSON_IsObject(actions)) {
-            applied = apply_ai_action_locked(actions);
         }
         xSemaphoreGive(s_mutex);
     }
-    if (applied) state_save();
+    if (!applied) s_undo = undo_before;
+    if (applied) {
+        if (state_save_command_id(has_command_id ? command_id : NULL) == ESP_OK && has_command_id) {
+            snprintf(s_last_command_id, sizeof(s_last_command_id), "%s", command_id);
+        }
+        snprintf(s_feedback, sizeof(s_feedback), "AI记录已保存，5秒内按确认键撤销");
+    } else if (duplicate_command) {
+        snprintf(s_feedback, sizeof(s_feedback), "命令已执行");
+    }
 
     bool replied = false;
     cJSON *reply = cJSON_GetObjectItemCaseSensitive(root, "reply_text");
@@ -859,6 +1311,9 @@ esp_err_t xigua_app_ai_response(const char *json)
         replied = true;
     }
     cJSON *error = cJSON_GetObjectItemCaseSensitive(root, "error");
+    if (!applied && !replied && duplicate_command) {
+        replied = true;
+    }
     if (!applied && !replied && cJSON_IsString(error) && error->valuestring) {
         snprintf(s_feedback, sizeof(s_feedback), "AI处理失败：%.36s", error->valuestring);
         replied = true;
@@ -872,6 +1327,14 @@ esp_err_t xigua_app_ai_response(const char *json)
 void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
     if (!s_running) return;
+    if (ev == BSP_BTN_RELEASE && btn == BSP_BTN_OK &&
+        (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) &&
+        s_ai_request_pending && xigua_ai_voice_phase() == XIGUA_AI_VOICE_RECORDING) {
+        xigua_ai_stop_voice();
+        snprintf(s_feedback, sizeof(s_feedback), "录音结束，正在识别");
+        ui_sync();
+        return;
+    }
     if (ev == BSP_BTN_LONG) {
         if (btn == BSP_BTN_UP && s_page == X_PAGE_OVERVIEW) {
             s_feed_ml = s_state.data.milk_ml;
@@ -881,8 +1344,22 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         } else if (btn == BSP_BTN_UP && s_page == X_PAGE_FEED) {
             s_feed_ingredient = (s_feed_ingredient + 1) % (sizeof(FEED_INGREDIENTS) / sizeof(FEED_INGREDIENTS[0]));
             ui_sync();
+        } else if (btn == BSP_BTN_UP && s_page == X_PAGE_WIFI &&
+                   (s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ||
+                    s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD)) {
+            wifi_ui_backspace();
+            ui_sync();
+        } else if (btn == BSP_BTN_OK && s_page == X_PAGE_WIFI &&
+                   (s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ||
+                    s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD)) {
+            wifi_ui_finish_edit();
+            ui_sync();
         } else if (btn == BSP_BTN_DOWN && s_page == X_PAGE_WIFI) {
-            go_page(X_PAGE_SETTINGS, 0);
+            if (s_wifi_ui_mode == X_WIFI_UI_MENU) {
+                go_page(X_PAGE_SETTINGS, 0);
+            } else {
+                wifi_ui_enter_menu();
+            }
             ui_sync();
         } else if (btn == BSP_BTN_DOWN && s_page != X_PAGE_OVERVIEW) {
             go_page(X_PAGE_OVERVIEW, 0);
@@ -892,6 +1369,9 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
                 if (s_page == X_PAGE_ACTIVE && !s_confirm_abort) {
                     s_confirm_abort = true;
                     s_abort_choice = false;
+                    ui_refresh_page();
+                } else if (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) {
+                    (void)ai_request_voice_current_mode();
                     ui_refresh_page();
                 } else {
                     snprintf(s_feedback, sizeof(s_feedback), "语音服务等待接入");
@@ -903,6 +1383,11 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         return;
     }
     if (ev != BSP_BTN_CLICK) return;
+
+    if (btn == BSP_BTN_OK && s_page == X_PAGE_OVERVIEW && undo_available()) {
+        if (undo_last()) ui_sync();
+        return;
+    }
 
     if (s_page == X_PAGE_FEED) {
         if (btn == BSP_BTN_UP && s_feed_ml > 10) s_feed_ml -= 10;
@@ -958,7 +1443,7 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         }
     } else if (s_page == X_PAGE_OVERVIEW) {
         if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
-            const size_t count = 6;
+            const size_t count = 7;
             s_focus = btn == BSP_BTN_UP ? (s_focus + count - 1) % count : (s_focus + 1) % count;
         } else if (btn == BSP_BTN_OK) {
             if (s_focus == 0) go_page(X_PAGE_VOICE, 0);
@@ -969,7 +1454,11 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
                 else start_active(X_ACTIVE_SLEEP), go_page(X_PAGE_ACTIVE, 0);
             }
             else if (s_focus == 4) go_page(X_PAGE_SOUND, 0);
-            else go_page(X_PAGE_SETTINGS, 0);
+            else if (s_focus == 5) {
+                (void)xigua_wifi_start();
+                wifi_ui_enter_menu();
+                go_page(X_PAGE_WIFI, 0);
+            } else go_page(X_PAGE_SETTINGS, 0);
             ui_sync();
             return;
         }
@@ -997,8 +1486,7 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             snprintf(s_feedback, sizeof(s_feedback), "已切换到%s模式",
                      s_ai_mode == 0 ? "问答" : "故事");
         } else if (btn == BSP_BTN_OK) {
-            snprintf(s_feedback, sizeof(s_feedback), "请长按确认键开始%s语音",
-                     s_ai_mode == 0 ? "问答" : "故事");
+            (void)ai_request_current_mode();
         }
     } else if (s_page == X_PAGE_SOUND) {
         if (btn == BSP_BTN_UP) s_focus = (s_focus + 2) % 3;
@@ -1011,6 +1499,7 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         else if (btn == BSP_BTN_OK) {
             if (s_focus == 0) {
                 (void)xigua_wifi_start();
+                wifi_ui_enter_menu();
                 go_page(X_PAGE_WIFI, 0);
             } else if (s_focus == 1) {
                 size_t next = (s_state.data.timezone_index + 1) %
@@ -1036,8 +1525,27 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             }
         }
     } else if (s_page == X_PAGE_WIFI) {
-        if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
-            (void)xigua_wifi_start();
+        if (s_wifi_ui_mode == X_WIFI_UI_MENU) {
+            const size_t item_count = 2;
+            if (btn == BSP_BTN_UP) s_focus = (s_focus + item_count - 1) % item_count;
+            else if (btn == BSP_BTN_DOWN) s_focus = (s_focus + 1) % item_count;
+            else if (btn == BSP_BTN_OK) {
+                (void)xigua_wifi_start();
+                if (s_focus == 0) {
+                    wifi_ui_begin_edit(false);
+                } else {
+                    (void)xigua_wifi_resume_provisioning();
+                    s_wifi_ui_mode = X_WIFI_UI_STATUS;
+                    snprintf(s_feedback, sizeof(s_feedback), "请用配网小程序输入 Wi-Fi");
+                }
+            }
+        } else if (s_wifi_ui_mode == X_WIFI_UI_STATUS) {
+            if (btn == BSP_BTN_OK) wifi_ui_enter_menu();
+        } else if (s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ||
+                   s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
+            if (btn == BSP_BTN_UP) wifi_ui_move_key(-1);
+            else if (btn == BSP_BTN_DOWN) wifi_ui_move_key(1);
+            else if (btn == BSP_BTN_OK) wifi_ui_choose_key();
         }
     }
 
