@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>西瓜育儿管理台</title>
+  <style>
+    :root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#203040;background:#f4f7fb}
+    body{max-width:1100px;margin:0 auto;padding:24px} header{display:flex;justify-content:space-between;align-items:center}
+    nav button,.card button{border:0;border-radius:8px;padding:9px 14px;background:#0b7285;color:white;cursor:pointer}
+    nav button.active{background:#174a5b}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+    .card{background:white;border-radius:12px;padding:16px;box-shadow:0 2px 12px #19324d16;margin:16px 0}
+    input,select{width:100%;box-sizing:border-box;padding:9px;margin:5px 0 10px;border:1px solid #ccd6df;border-radius:7px}
+    table{width:100%;border-collapse:collapse;background:white}.scroll{overflow:auto}th,td{text-align:left;padding:8px;border-bottom:1px solid #e6ebef;font-size:14px}
+    .muted{color:#657786}.error{color:#b42318}.ok{color:#067647}.hidden{display:none}
+  </style>
+</head>
+<body>
+<header><div><h1>西瓜育儿管理台</h1><div class="muted">记录、设备与儿歌/白噪音目录</div></div><button id="logout">退出</button></header>
+<nav class="card"><button data-page="overview" class="active">概览</button> <button data-page="events">记录</button> <button data-page="audio">音频</button></nav>
+<main id="overview" class="page"><div class="grid"><section class="card"><h2>孩子</h2><form id="child-form"><input name="id" placeholder="孩子 ID" required><input name="name" placeholder="称呼" required><input name="birth_date" placeholder="出生日期 YYYY-MM-DD"><button>保存孩子</button></form><div id="children"></div></section><section class="card"><h2>设备</h2><form id="device-form"><input name="id" placeholder="设备 ID" required><input name="child_id" placeholder="孩子 ID" required><input name="name" placeholder="设备名称"><button>注册设备</button></form><div id="devices"></div></section></div><section class="card"><h2>今日汇总</h2><pre id="summary">选择孩子后加载</pre></section></main>
+<main id="events" class="page hidden"><section class="card"><h2>最近记录</h2><label>孩子 ID<input id="event-child" placeholder="孩子 ID"></label><button id="load-events">加载</button><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>奶量</th><th>尿布</th><th>时长</th><th>备注</th></tr></thead><tbody id="event-table"></tbody></table></div></section></main>
+<main id="audio" class="page hidden"><section class="card"><h2>添加音频目录项</h2><form id="audio-form"><input name="title" placeholder="标题" required><select name="category"><option value="song">儿歌</option><option value="white_noise">白噪音</option><option value="story">故事</option><option value="other">其他</option></select><input name="file_name" placeholder="服务器 /data/media 下的文件名"><input name="play_url" placeholder="或填写 COS/HTTPS 播放地址"><input name="duration_ms" type="number" placeholder="时长（毫秒）"><button>保存目录项</button></form><div id="tracks"></div></section></main>
+<p id="message" class="muted"></p>
+<script>
+const $=s=>document.querySelector(s), msg=t=>$('#message').textContent=t;
+async function api(path,opt={}){const r=await fetch(path,{headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});if(!r.ok)throw Error((await r.json().catch(()=>({detail:r.statusText}))).detail);return r.json()}
+function formData(form){return Object.fromEntries(new FormData(form));}
+async function refresh(){try{const c=await api('/admin/api/children');$('#children').innerHTML=c.items.map(x=>`<p><b>${x.name}</b> <code>${x.id}</code></p>`).join('')||'<p class="muted">暂无</p>';const d=await api('/admin/api/devices');$('#devices').innerHTML=d.items.map(x=>`<p><b>${x.name||x.id}</b> → <code>${x.child_id}</code><br><span class="muted">${x.last_seen_at||'尚未同步'}</span></p>`).join('')||'<p class="muted">暂无</p>';const t=await api('/admin/api/audio');$('#tracks').innerHTML=t.items.map(x=>`<p><b>${x.title}</b>（${x.category}）<br><a href="${x.play_url||'#'}" target="_blank">播放地址</a></p>`).join('')||'<p class="muted">暂无</p>';msg('已刷新');}catch(e){msg(e.message);}}
+$('#child-form').onsubmit=async e=>{e.preventDefault();try{await api('/v1/children',{method:'POST',body:JSON.stringify(formData(e.target))});msg('孩子已保存');refresh()}catch(x){msg(x.message)}};
+$('#device-form').onsubmit=async e=>{e.preventDefault();try{await api('/v1/devices/register',{method:'POST',body:JSON.stringify(formData(e.target))});msg('设备已注册');refresh()}catch(x){msg(x.message)}};
+$('#audio-form').onsubmit=async e=>{e.preventDefault();try{let d=formData(e.target);if(!d.file_name)d.file_name=null;if(!d.play_url)d.play_url=null;if(d.duration_ms)d.duration_ms=Number(d.duration_ms);else d.duration_ms=null;await api('/v1/audio/tracks',{method:'POST',body:JSON.stringify(d)});msg('音频目录项已保存');refresh()}catch(x){msg(x.message)}};
+$('#load-events').onclick=async()=>{try{const id=$('#event-child').value;const d=await api('/v1/children/'+encodeURIComponent(id)+'/events');$('#event-table').innerHTML=d.items.map(x=>`<tr><td>${x.occurred_at}</td><td>${x.type}</td><td>${x.amount_ml??''}</td><td>${x.diaper_kind??''}</td><td>${x.duration_min??''}</td><td>${x.note??''}</td></tr>`).join('');const s=await api('/v1/children/'+encodeURIComponent(id)+'/summary');$('#summary').textContent=JSON.stringify(s,null,2)}catch(e){msg(e.message)}};
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.add('hidden'));$('#'+b.dataset.page).classList.remove('hidden')});
+$('#logout').onclick=async()=>{await fetch('/admin/logout',{method:'POST'});location.reload()}; refresh();
+</script></body></html>

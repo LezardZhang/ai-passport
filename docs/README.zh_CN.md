@@ -208,6 +208,7 @@ LICENSE                  仓库许可证
 | [西瓜助手实施方案](assets/xigua-implementation-plan.zh_CN.md) | 派生育儿助手的产品范围、架构、阶段计划和验收条件 |
 | [西瓜助手界面设计](assets/xigua-ui-design.zh_CN.md) | 页面职责、记录流程、三键操作和服务端衔接 |
 | [西瓜项目交底](assets/xigua-project-handoff.zh_CN.md) | 当前实现、验证证据、未完成问题和接手步骤 |
+| [西瓜育儿后端](../backend/README.zh_CN.md) | Docker 部署、管理界面、记录接口、音频目录和 Hermes 接入 |
 | [参与贡献](contribution/README.zh_CN.md) | 文档、提交与 Pull Request 约定 |
 | [品牌素材](brand/README.zh_CN.md) | 产品视觉参考与[品牌说明](brand/brand-and-product.zh_CN.md) |
 | [Fork 指南](fork-guide.zh_CN.md) · [更新记录](CHANGELOG.zh_CN.md) | 下游工作流与版本历史 |
