@@ -73,7 +73,7 @@
 - 键盘控件仅编辑时分配，退出时释放。固定 UI 中文在 16 px 和 20 px 字库中的覆盖检查通过。
 - Build：PASS；合并镜像和调试归档校验通过，SHA-256 为 `cb7792f755c82be4209df441ca78990ba0fbebc7b03edc7ebbe76429c16dab53`，归档为 `build/firmware/cb7792f755c82be4209df441ca78990ba0fbebc7b03edc7ebbe76429c16dab53/`。
 - Host tests：本次键盘和 Wi-Fi 回归测试 PASS（编译实际应用逻辑），仓库检查 PASS。完整门禁已尝试，但 actionlint 安装脚本不支持当前 Windows Git Bash 平台，门禁未完成；原有五个文档测试断言失败仍未处理。
-- Device tests：待本次镜像刷入后的启动、自动连接和 MiMo 自检结果。屏幕布局与实体按键仍需用户观察。
+- Device tests：COM6 刷写与启动 PASS，NVS 保留；源码检查点为 `33fff9eb84774a465949095d89baac7e1bcc90b9`。启动约 43 秒后自动连接 `GUANTANG_2.4G`，取得 `192.168.10.214`；此前的 reason 4／205 触发重试和重扫，不再永久停在等待搜索。首次连接较慢，日志显示同名 AP 的多个信道关联失败后才成功。联网后的有限串口观察未获得 MiMo 自检结果，且出现一次 beacon timeout 探测提示；持续联网稳定性、屏幕布局与实体按键仍需确认。
 
 ## 尚未完成和待改进
 

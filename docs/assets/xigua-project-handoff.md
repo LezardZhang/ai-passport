@@ -73,7 +73,7 @@ Next, run the remaining device acceptance sequence: scan/select/password entry, 
 - Keyboard widgets are allocated only while editing and released on exit. Fixed UI Chinese glyph coverage passed for both 16 px and 20 px inventories.
 - Build: PASS. Merged image and debug archive verified. SHA-256: `cb7792f755c82be4209df441ca78990ba0fbebc7b03edc7ebbe76429c16dab53`; archive: `build/firmware/cb7792f755c82be4209df441ca78990ba0fbebc7b03edc7ebbe76429c16dab53/`.
 - Host tests: keyboard and Wi-Fi regression tests PASS using actual application logic; repository checks PASS. The complete gate was attempted but its actionlint installer does not support the current Windows Git Bash platform, so the gate is incomplete. The five earlier documentation-test assertion failures remain outside this change.
-- Device tests: awaiting startup, automatic connection, and MiMo self-check after flashing this image. Screen layout and physical buttons still require user observation.
+- Device tests: COM6 flash and startup PASS with NVS preserved; source checkpoint: `33fff9eb84774a465949095d89baac7e1bcc90b9`. About 43 seconds after startup the device automatically connected to `GUANTANG_2.4G` and obtained `192.168.10.214`. Earlier reason 4/205 failures triggered retries and a rescan instead of permanently stopping in network search. Initial connection is still slow: the log shows association failures at several channels for the same SSID before success. The bounded post-connect observation did not capture a MiMo self-check result and included a beacon-timeout probe message; sustained connection stability, screen layout, and physical buttons remain unverified.
 
 ## Remaining work
 
