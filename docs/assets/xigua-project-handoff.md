@@ -198,6 +198,10 @@ multiple commands never become records. Manual and voice sleep share this path.
 
 Overview now has Start sleep / End sleep as one top-level toggle. Sleep continues
 while using other pages, recording feeding, or running the independent timer.
+Each completed sleep now keeps exact start and end timestamps as well as minutes.
+The active session and completed sessions have separate Today pages. The original
+state/event blob remains compatible; exact pairs use a separate versioned NVS blob
+keyed by event slot. Old records remain readable and may have unknown starts.
 Within one boot duration uses monotonic time; across reboot it uses trusted
 timestamps or reports uncalibrated duration. The existing NVS end timestamp's
 `-1` sentinel preserves structure size; old active sleep migrates. Older firmware
@@ -223,12 +227,12 @@ verified ASCII source mirror. Stack frames: capture 80, voice request 560, AI
 worker 432, result consumer 32 and local record transaction 688 bytes; 4 KiB
 reply buffers stay off the task stacks.
 
-App: 5,773,120 bytes; factory free: 452,800 bytes. Partition table unchanged.
-Archive: `build/firmware/08484d011a536b53adaa910208dca443433a7f41643520ffc0ddd267a1cf60a8/`.
+App: 5,775,616 bytes; factory free: 450,304 bytes. Partition table unchanged.
+Archive: `build/firmware/1eabfcedf481db8fc6859e21128ad6933884303517fc736e4fb5e4ff9cec4127/`.
 Full-image SHA-256:
-`08484d011a536b53adaa910208dca443433a7f41643520ffc0ddd267a1cf60a8`.
+`1eabfcedf481db8fc6859e21128ad6933884303517fc736e4fb5e4ff9cec4127`.
 Matching ELF SHA-256:
-`a079e089781f9ccfed309688bd72248a3704990086bb5f438ddb86bbfc50ed5f`.
+`3001c19686c253814a851cccffe2720e257c8f9bb4061d96cf79b7b66149c632`.
 The source/configuration checkpoint is created before the authorized segmented
 COM6 write, preserving NVS and voice data.
 

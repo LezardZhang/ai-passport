@@ -100,13 +100,14 @@ DOUBLES = r'''
 static x_state_t s_state;
 static x_undo_t s_voice_undo;
 static x_persisted_t staged, disk;
+static x_sleep_times_t staged_times, disk_times;
 static bool s_nvs_open = true;
 static int s_mutex = 1, s_nvs = 1, locked, fail_set, fail_commits, commits;
 static int64_t now_us, now_epoch = 1700000000;
 static time_t mock_time(time_t *out) { if (out) *out = now_epoch; return now_epoch; }
 #define time mock_time
 static struct tm *mock_localtime_r(const time_t *value, struct tm *out) {
-    struct tm *result = localtime(value);
+    struct tm *result = gmtime(value); /* Controlled UTC calendar for date assertions. */
     if (!result) return NULL;
     *out = *result; return out;
 }
@@ -117,9 +118,19 @@ static int xSemaphoreTake(int mutex, int ticks) {
 }
 static void xSemaphoreGive(int mutex) { assert(mutex == 1 && locked); locked = 0; }
 static int nvs_set_blob(int nvs, const char *key, const void *value, size_t size) {
-    assert(nvs == 1 && locked && !strcmp(key, "state") && size == sizeof(staged));
+    assert(nvs == 1 && locked);
     if (fail_set) return ESP_FAIL;
-    memcpy(&staged, value, size); return ESP_OK;
+    if (!strcmp(key, "state")) {
+        assert(size == sizeof(staged)); memcpy(&staged, value, size);
+    } else {
+        assert(!strcmp(key, "sleep_times") && size == sizeof(staged_times));
+        memcpy(&staged_times, value, size);
+    }
+    return ESP_OK;
+}
+static int nvs_get_blob(int nvs, const char *key, void *value, size_t *size) {
+    assert(nvs == 1 && !strcmp(key, "sleep_times") && *size == sizeof(disk_times));
+    memcpy(value, &disk_times, *size); return ESP_OK;
 }
 static int nvs_set_str(int nvs, const char *key, const char *value) {
     (void)nvs; (void)key; (void)value; return ESP_OK;
@@ -127,7 +138,7 @@ static int nvs_set_str(int nvs, const char *key, const char *value) {
 static int nvs_commit(int nvs) {
     assert(nvs == 1 && locked); ++commits;
     if (fail_commits) { --fail_commits; return ESP_FAIL; }
-    disk = staged; return ESP_OK;
+    disk = staged; disk_times = staged_times; return ESP_OK;
 }
 static bool cJSON_IsObject(const cJSON *x) { return x && x->type == 1; }
 static bool cJSON_IsArray(const cJSON *x) { return x && x->type == 2; }
@@ -158,6 +169,7 @@ static void reset(void) {
     assert(!locked);
     memset(&s_state, 0, sizeof(s_state)); memset(&s_voice_undo, 0, sizeof(s_voice_undo));
     memset(&disk, 0, sizeof(disk)); staged = disk;
+    memset(&disk_times, 0, sizeof(disk_times)); staged_times = disk_times;
     fail_set = fail_commits = commits = 0; now_epoch = 1700000000; now_us = 1000000;
     (void)X_STATE_MAGIC; (void)X_NVS_NAMESPACE;
 }
@@ -197,6 +209,16 @@ int main(void) {
     now_us += 120LL * 60000000; now_epoch += 7200;
     assert(run(11, false) == ESP_OK && !xigua_sleep_running(disk.sleep_end_epoch));
     assert(disk.sleep_count == 1 && disk.sleep_minutes == 120 && disk.active == X_ACTIVE_TIMER);
+    assert(disk_times.entries[1].start_epoch == 1700000000);
+    assert(disk_times.entries[1].end_epoch == 1700007200);
+    assert(sleep_record_slot(&disk, 0) == 1 && sleep_page_count(&disk) == 2);
+    char detail[192];
+    format_sleep_record(&s_state, 1, detail, sizeof(detail));
+    assert(strstr(detail, "开始 ") && strstr(detail, "结束 ") && strstr(detail, "120"));
+    x_persisted_t preserved = disk;
+    memset(&s_state, 0, sizeof(s_state)); s_state.data = preserved;
+    load_sleep_times();
+    assert(s_state.sleep_times.entries[1].start_epoch == 1700000000); /* Reboot restores exact start. */
     assert(run(11, false) == ESP_ERR_INVALID_ARG && disk.sleep_count == 1);
     reset(); assert(run(10, false) == ESP_OK);
     s_state.sleep_time_known = false; now_epoch += 1800; /* Reboot / page independent. */
@@ -205,7 +227,39 @@ int main(void) {
     now_us += 60LL * 60000000; fail_commits = 1;
     assert(run(11, false) == ESP_FAIL && xigua_sleep_running(disk.sleep_end_epoch));
     assert(s_state.sleep_time_known && disk.sleep_count == 0 && disk.event_count == 0);
-    puts("Voice record whitelist, NVS rollback and independent sleep: PASS");
+    assert(disk_times.entries[0].start_epoch == 0);
+    /* Two sessions keep their own exact seconds, including a midnight crossing. */
+    reset(); now_epoch = 1700006390; assert(run(10, false) == ESP_OK);
+    assert(sleep_page_count(&disk) == 2);
+    now_epoch += 125; now_us += 125000000;
+    assert(run(11, false) == ESP_OK);
+    format_sleep_record(&s_state, 0, detail, sizeof(detail));
+    assert(strstr(detail, "11-14 23:59") && strstr(detail, "11-15 00:01"));
+    int64_t first_start = disk_times.entries[0].start_epoch;
+    now_epoch += 3600; assert(run(10, false) == ESP_OK);
+    now_epoch += 185; now_us += 185000000;
+    assert(run(11, false) == ESP_OK && disk_times.entries[0].start_epoch == first_start);
+    assert(disk_times.entries[1].start_epoch == 1700010115);
+    assert(disk_times.entries[1].end_epoch == 1700010300);
+    assert(sleep_record_slot(&disk, 0) == 1 && sleep_record_slot(&disk, 1) == 0);
+    /* Wrapping the general event ring clears stale times even for another event type. */
+    for (size_t i = 0; i < 31; ++i) assert(run(8, false) == ESP_OK);
+    assert(disk.events[0].type == X_EVENT_BATH && disk_times.entries[0].start_epoch == 0);
+    /* Old duration-only records never fabricate a start equal to the end. */
+    reset(); now_epoch = 1700100000; assert(run(7, false) == ESP_OK);
+    disk_times.magic = 0; s_state.data.sleep_start_epoch = s_state.data.sleep_end_epoch;
+    load_sleep_times();
+    assert(s_state.sleep_times.entries[0].start_epoch == 0);
+    /* Backfill the latest old real session, leaving other missing starts unknown. */
+    s_state.data.sleep_start_epoch = s_state.data.sleep_end_epoch - 1800;
+    load_sleep_times();
+    assert(s_state.sleep_times.entries[0].start_epoch == 1700098200);
+    /* Untrusted wall clock keeps duration but never claims a valid date/time. */
+    reset(); now_epoch = 0; assert(run(10, false) == ESP_OK);
+    now_us += 60000000; now_epoch = 60;
+    assert(run(11, false) == ESP_OK && disk.sleep_minutes == 1);
+    assert(disk_times.entries[0].start_epoch == 0 && disk_times.entries[0].end_epoch == 0);
+    puts("Voice records, exact sleep times, reboot/migration, ring paging and NVS rollback: PASS");
 }
 '''
 
@@ -215,7 +269,9 @@ def main():
     types = source[source.index("typedef enum {\n    X_ACTIVE_NONE"):source.index("static lv_obj_t *s_screen;")]
     food = re.search(r"static const char \*const FEED_INGREDIENTS\[\] = .*?;", source).group(0)
     functions = []
-    for name in ("state_save_locked", "append_event_locked", "json_event_time", "ingredient_from_json",
+    for name in ("state_save_locked", "append_event_locked", "append_sleep_event_locked",
+                 "json_event_time", "ingredient_from_json", "format_sleep_time", "sleep_record_slot",
+                 "sleep_page_count", "format_sleep_record", "load_sleep_times",
                  "json_number_in_range", "apply_sleep_action_locked", "apply_ai_action_locked",
                  "xigua_app_process_ai_reply"):
         match = re.search(rf"^(?:static )?[^\n]+\b{name}\([^;]*?\)\n\{{.*?^\}}", source, re.M | re.S)

@@ -149,7 +149,16 @@ typedef struct {
 } x_legacy_persisted_t;
 
 typedef struct {
+    /* Separate NVS key keeps the original state/event blob readable on rollback. */
+    uint32_t magic;
+    struct { int64_t start_epoch, end_epoch; } entries[X_EVENT_CAPACITY];
+} x_sleep_times_t;
+
+#define X_SLEEP_TIMES_MAGIC 0x58535431U
+
+typedef struct {
     x_persisted_t data;
+    x_sleep_times_t sleep_times;
     int battery_soc;
     int64_t active_started_us;
     bool active_time_known;
@@ -165,6 +174,7 @@ typedef struct {
 
 typedef struct {
     x_persisted_t data;
+    x_sleep_times_t sleep_times;
     int64_t active_started_us;
     int64_t expires_us;
     bool active_time_known;
@@ -287,6 +297,9 @@ static void apply_timezone(void)
 static esp_err_t state_save_locked(const char *command_id)
 {
     esp_err_t err = nvs_set_blob(s_nvs, "state", &s_state.data, sizeof(s_state.data));
+    s_state.sleep_times.magic = X_SLEEP_TIMES_MAGIC;
+    if (err == ESP_OK) err = nvs_set_blob(s_nvs, "sleep_times", &s_state.sleep_times,
+                                         sizeof(s_state.sleep_times));
     if (err == ESP_OK && command_id && command_id[0] != '\0') {
         err = nvs_set_str(s_nvs, "last_cmd_id", command_id);
     }
@@ -333,6 +346,7 @@ static bool undo_available(void)
 static void undo_capture_locked(void)
 {
     s_undo.data = s_state.data;
+    s_undo.sleep_times = s_state.sleep_times;
     s_undo.active_started_us = s_state.active_started_us;
     s_undo.active_time_known = s_state.active_time_known;
     s_undo.sleep_started_us = s_state.sleep_started_us;
@@ -356,6 +370,7 @@ static bool undo_last(void)
         return false;
     }
     s_state.data = s_undo.data;
+    s_state.sleep_times = s_undo.sleep_times;
     s_state.active_started_us = s_undo.active_started_us;
     s_state.active_time_known = s_undo.active_time_known;
     s_state.sleep_started_us = s_undo.sleep_started_us;
@@ -373,6 +388,7 @@ static void append_event_locked(x_event_type_t type, uint16_t amount,
 {
     x_persisted_t *data = &s_state.data;
     uint8_t slot = data->event_head;
+    memset(&s_state.sleep_times.entries[slot], 0, sizeof(s_state.sleep_times.entries[slot]));
     data->events[slot] = (x_event_t){
         .epoch = epoch > 0 ? epoch : (int64_t)time(NULL),
         .amount = amount,
@@ -382,6 +398,14 @@ static void append_event_locked(x_event_type_t type, uint16_t amount,
     };
     data->event_head = (uint8_t)((slot + 1) % X_EVENT_CAPACITY);
     if (data->event_count < X_EVENT_CAPACITY) data->event_count++;
+}
+
+static void append_sleep_event_locked(int64_t start, int64_t end, uint16_t minutes, bool duration_known)
+{
+    uint8_t slot = s_state.data.event_head;
+    append_event_locked(X_EVENT_SLEEP, 0, minutes, duration_known ? 0 : 1, end);
+    s_state.sleep_times.entries[slot].start_epoch = start >= X_MIN_VALID_EPOCH ? start : 0;
+    s_state.sleep_times.entries[slot].end_epoch = end >= X_MIN_VALID_EPOCH ? end : 0;
 }
 
 static void event_totals(const x_persisted_t *data, uint16_t *feed_count,
@@ -509,10 +533,56 @@ static bool apply_sleep_action_locked(bool begin)
         s_state.data.sleep_end_epoch = now;
         s_state.data.sleep_count++;
         s_state.data.sleep_minutes += s_state.last_sleep_duration;
-        append_event_locked(X_EVENT_SLEEP, 0, s_state.last_sleep_duration, 0, now);
+        append_sleep_event_locked(s_state.data.sleep_start_epoch, now,
+                                  s_state.last_sleep_duration, s_state.last_sleep_duration_known);
         s_state.sleep_time_known = false;
     }
     return true;
+}
+
+static const char *format_sleep_time(int64_t epoch, char *out, size_t size)
+{
+    time_t raw = (time_t)epoch;
+    struct tm local_time;
+    if (epoch < X_MIN_VALID_EPOCH || localtime_r(&raw, &local_time) == NULL ||
+        strftime(out, size, "%m-%d %H:%M", &local_time) == 0) {
+        snprintf(out, size, "时间未知");
+    }
+    return out;
+}
+
+/* Newest first, using ring position rather than wall-clock ordering. */
+static int sleep_record_slot(const x_persisted_t *data, size_t index)
+{
+    for (size_t n = 0; n < data->event_count; ++n) {
+        size_t slot = (data->event_head + X_EVENT_CAPACITY - 1 - n) % X_EVENT_CAPACITY;
+        if (data->events[slot].type == X_EVENT_SLEEP) {
+            if (!index) return (int)slot;
+            --index;
+        }
+    }
+    return -1;
+}
+
+static size_t sleep_page_count(const x_persisted_t *data)
+{
+    size_t pages = 1 + (xigua_sleep_running(data->sleep_end_epoch) ? 1 : 0);
+    for (size_t i = 0; i < data->event_count; ++i) {
+        size_t slot = (data->event_head + X_EVENT_CAPACITY - 1 - i) % X_EVENT_CAPACITY;
+        if (data->events[slot].type == X_EVENT_SLEEP) ++pages;
+    }
+    return pages;
+}
+
+static void format_sleep_record(const x_state_t *snapshot, size_t slot, char *out, size_t capacity)
+{
+    const x_event_t *event = &snapshot->data.events[slot];
+    char start[20], end[20], duration[32];
+    format_sleep_time(snapshot->sleep_times.entries[slot].start_epoch, start, sizeof(start));
+    format_sleep_time(event->epoch, end, sizeof(end));
+    if (event->ingredient == 1) snprintf(duration, sizeof(duration), "时长待校准");
+    else snprintf(duration, sizeof(duration), "时长 %u 分钟", event->duration_min);
+    snprintf(out, capacity, "开始 %s\n结束 %s\n%s", start, end, duration);
 }
 
 static bool apply_ai_action_locked(cJSON *action)
@@ -558,11 +628,13 @@ static bool apply_ai_action_locked(cJSON *action)
         cJSON *end = cJSON_GetObjectItemCaseSensitive(action, "end_timestamp");
         s_state.data.sleep_count++;
         s_state.data.sleep_minutes += (uint16_t)duration;
+        int64_t start_epoch = cJSON_IsNumber(start) ? json_event_time(action, "start_timestamp") : 0;
+        int64_t end_epoch = cJSON_IsNumber(end) ? json_event_time(action, "end_timestamp") : event_time;
         if (!xigua_sleep_running(s_state.data.sleep_end_epoch)) {
-            s_state.data.sleep_start_epoch = cJSON_IsNumber(start) ? json_event_time(action, "start_timestamp") : event_time;
-            s_state.data.sleep_end_epoch = cJSON_IsNumber(end) ? json_event_time(action, "end_timestamp") : event_time;
+            s_state.data.sleep_start_epoch = start_epoch;
+            s_state.data.sleep_end_epoch = end_epoch;
         }
-        append_event_locked(X_EVENT_SLEEP, 0, (uint16_t)duration, 0, event_time);
+        append_sleep_event_locked(start_epoch, end_epoch, (uint16_t)duration, true);
         return true;
     }
     if (strcmp(action_name, "record_bath") == 0 || strcmp(action_name, "record_tummy") == 0) {
@@ -596,7 +668,8 @@ esp_err_t xigua_app_process_ai_reply(char *text, size_t capacity, bool truncated
     x_state_t before = s_state;
     esp_err_t err = apply_ai_action_locked(action) ? state_save_locked(NULL) : ESP_ERR_INVALID_ARG;
     if (err == ESP_OK) {
-        s_voice_undo = (x_undo_t){ .data = before.data, .active_started_us = before.active_started_us,
+        s_voice_undo = (x_undo_t){ .data = before.data, .sleep_times = before.sleep_times,
+            .active_started_us = before.active_started_us,
             .active_time_known = before.active_time_known, .sleep_started_us = before.sleep_started_us,
             .sleep_time_known = before.sleep_time_known, .valid = true };
         cJSON *name = cJSON_GetObjectItemCaseSensitive(action, "action");
@@ -605,14 +678,19 @@ esp_err_t xigua_app_process_ai_reply(char *text, size_t capacity, bool truncated
         } else if (strcmp(name->valuestring, "record_diaper") == 0) {
             snprintf(text, capacity, "尿便记录已保存。");
         } else if (strcmp(name->valuestring, "record_sleep") == 0) {
-            cJSON *duration = cJSON_GetObjectItemCaseSensitive(action, "duration_min");
-            snprintf(text, capacity, "已记录睡眠 %d 分钟。", duration->valueint);
+            char details[160];
+            size_t slot = (s_state.data.event_head + X_EVENT_CAPACITY - 1) % X_EVENT_CAPACITY;
+            format_sleep_record(&s_state, slot, details, sizeof(details));
+            snprintf(text, capacity, "睡眠记录已保存。\n%s", details);
         } else if (strcmp(name->valuestring, "start_sleep") == 0) {
-            snprintf(text, capacity, "睡眠已开始，可继续使用其他功能。");
+            char start[20];
+            snprintf(text, capacity, "睡眠已开始，可使用其他功能。\n开始 %s",
+                format_sleep_time(s_state.data.sleep_start_epoch, start, sizeof(start)));
         } else if (strcmp(name->valuestring, "end_sleep") == 0) {
-            if (s_state.last_sleep_duration_known) snprintf(text, capacity,
-                "睡眠已结束，已记录 %u 分钟。", s_state.last_sleep_duration);
-            else snprintf(text, capacity, "睡眠已结束，时长待校准。");
+            char details[160];
+            size_t slot = (s_state.data.event_head + X_EVENT_CAPACITY - 1) % X_EVENT_CAPACITY;
+            format_sleep_record(&s_state, slot, details, sizeof(details));
+            snprintf(text, capacity, "睡眠已结束。\n%s", details);
         } else snprintf(text, capacity, "%s记录已保存。",
             strcmp(name->valuestring, "record_bath") == 0 ? "洗澡" : "趴玩");
         ESP_LOGI(TAG, "voice record saved action=%s", name->valuestring);
@@ -639,12 +717,44 @@ static bool ui_take_voice_undo(void)
     return saved;
 }
 
+static bool load_sleep_times(void)
+{
+    size_t size = sizeof(s_state.sleep_times);
+    bool changed = false;
+    if (nvs_get_blob(s_nvs, "sleep_times", &s_state.sleep_times, &size) != ESP_OK ||
+        size != sizeof(s_state.sleep_times) || s_state.sleep_times.magic != X_SLEEP_TIMES_MAGIC) {
+        memset(&s_state.sleep_times, 0, sizeof(s_state.sleep_times));
+        changed = true;
+    }
+    for (size_t i = 0; i < X_EVENT_CAPACITY; ++i) {
+        const x_event_t *event = &s_state.data.events[i];
+        int64_t end = event->epoch >= X_MIN_VALID_EPOCH ? event->epoch : 0;
+        if (event->type != X_EVENT_SLEEP || s_state.sleep_times.entries[i].end_epoch != end) {
+            if (s_state.sleep_times.entries[i].start_epoch || s_state.sleep_times.entries[i].end_epoch)
+                changed = true;
+            memset(&s_state.sleep_times.entries[i], 0, sizeof(s_state.sleep_times.entries[i]));
+        }
+        /* Only the latest old session has a real start timestamp available. */
+        if (event->type == X_EVENT_SLEEP && !s_state.sleep_times.entries[i].start_epoch &&
+            end >= X_MIN_VALID_EPOCH && end == s_state.data.sleep_end_epoch &&
+            s_state.data.sleep_start_epoch >= X_MIN_VALID_EPOCH &&
+            end - s_state.data.sleep_start_epoch >= (int64_t)event->duration_min * 60 &&
+            end - s_state.data.sleep_start_epoch < (int64_t)event->duration_min * 60 + 60) {
+            s_state.sleep_times.entries[i].start_epoch = s_state.data.sleep_start_epoch;
+            s_state.sleep_times.entries[i].end_epoch = end;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 static void state_load(void)
 {
     state_defaults();
     if (!s_nvs_open) return;
     uint8_t raw[sizeof(x_persisted_t)] = { 0 };
     size_t size = sizeof(raw);
+    bool migrated = false;
     if (nvs_get_blob(s_nvs, "state", raw, &size) == ESP_OK && size == sizeof(raw)) {
         x_persisted_t data;
         x_legacy_persisted_t legacy;
@@ -657,6 +767,7 @@ static void state_load(void)
                             legacy.active <= X_ACTIVE_TIMER &&
                             valid_timer_minutes(legacy.timer_minutes);
         if (!new_valid && legacy_valid) {
+            migrated = true;
             data.magic = legacy.magic;
             data.milk_ml = legacy.milk_ml;
             data.milk_count = legacy.milk_count;
@@ -692,15 +803,15 @@ static void state_load(void)
                 s_state.data.event_count = 0;
                 s_state.data.event_head = 0;
             }
-            if (!new_valid && legacy_valid) state_save();
             /* Earlier builds put ongoing sleep into the timer's active slot. */
             if (s_state.data.active == X_ACTIVE_SLEEP) {
+                migrated = true;
                 s_state.data.sleep_end_epoch = XIGUA_SLEEP_RUNNING_END;
                 s_state.data.active = X_ACTIVE_NONE;
-                state_save();
             }
         }
     }
+    if (load_sleep_times() || migrated) state_save();
     apply_timezone();
 }
 
@@ -1051,7 +1162,8 @@ static void ui_menu_focus(lv_obj_t *card, bool selected)
     lv_obj_set_style_outline_color(card, lv_color_hex(0xFFFFFF), 0);
 }
 
-static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper, bool sleeping)
+static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper, bool sleeping,
+                            int64_t sleep_start)
 {
     if (!s_home_panel) {
         s_home_panel = lv_obj_create(s_screen);
@@ -1063,7 +1175,11 @@ static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper, bo
         for (size_t i = 0; i < 3; ++i) s_home_cards[i] = ui_menu_card(s_home_panel, 54 + (int)i * 44);
     }
     lv_obj_add_flag(s_body, LV_OBJ_FLAG_HIDDEN);
-    if (sleeping) lv_label_set_text_fmt(s_home_summary, "奶量 %u 毫升\n睡眠进行中  尿便 %u 次", milk_ml, diaper);
+    if (sleeping) {
+        char start[20];
+        lv_label_set_text_fmt(s_home_summary, "奶量 %u 毫升\n开始 %s", milk_ml,
+                             format_sleep_time(sleep_start, start, sizeof(start)));
+    }
     else lv_label_set_text_fmt(s_home_summary, "奶量 %u 毫升\n睡眠 %u 次  尿便 %u 次", milk_ml, sleep, diaper);
     size_t first = xigua_menu_first(s_focus, 3);
     for (size_t i = 0; i < 3; ++i) {
@@ -1246,7 +1362,28 @@ static void ui_refresh_page(void)
         break;
     case X_PAGE_TODAY:
         ui_set_title("今天");
-        if (!wall_clock_known()) {
+        {
+        size_t pages = sleep_page_count(&snapshot.data);
+        if (s_focus >= pages) s_focus = pages - 1;
+        bool sleeping = xigua_sleep_running(snapshot.data.sleep_end_epoch);
+        if (s_focus == 1 && sleeping) {
+            uint16_t minutes;
+            bool known = xigua_sleep_duration(snapshot.sleep_time_known, snapshot.sleep_started_us,
+                esp_timer_get_time(), snapshot.data.sleep_start_epoch, (int64_t)time(NULL), &minutes);
+            char duration[32];
+            if (known) snprintf(duration, sizeof(duration), "时长 %u 分钟", minutes);
+            else snprintf(duration, sizeof(duration), "时长待校准");
+            snprintf(text, sizeof(text), "睡眠进行中\n开始 %s\n结束 尚未结束\n%s",
+                format_sleep_time(snapshot.data.sleep_start_epoch, start_clock, sizeof(start_clock)), duration);
+        } else if (s_focus > 0) {
+            int slot = sleep_record_slot(&snapshot.data, s_focus - 1 - (sleeping ? 1 : 0));
+            char details[160];
+            if (slot >= 0) {
+                format_sleep_record(&snapshot, (size_t)slot, details, sizeof(details));
+                snprintf(text, sizeof(text), "最近睡眠 %u/%u\n%s", (unsigned)(s_focus - (sleeping ? 1 : 0)),
+                         (unsigned)(pages - 1 - (sleeping ? 1 : 0)), details);
+            } else snprintf(text, sizeof(text), "暂无睡眠记录");
+        } else if (!wall_clock_known()) {
             snprintf(text, sizeof(text), "时间待校准\n\n校时后显示今日统计\n本地记录仍可继续保存");
         } else {
             snprintf(text, sizeof(text), "喂养 %u 次（%lu 毫升）\n睡眠 %u 次（%u 分钟）\n尿 %u  便 %u\n洗澡 %u\n趴玩 %u\n计时 %u",
@@ -1255,7 +1392,8 @@ static void ui_refresh_page(void)
                      pee_count, poop_count,
                      bath_count, tummy_count, timer_count);
         }
-        ui_set_hint("上/下查看  长按下键返回");
+        ui_set_hint("上/下翻页查看睡眠\n长按下键返回");
+        }
         break;
     case X_PAGE_SETTINGS:
         ui_set_title("设置");
@@ -1343,7 +1481,8 @@ static void ui_refresh_page(void)
     if (snapshot.battery_soc >= 0) lv_label_set_text_fmt(s_battery, "%d%%", snapshot.battery_soc);
     if (s_status) lv_label_set_text(s_status, s_feedback);
     if (s_page == X_PAGE_OVERVIEW) ui_home_render(snapshot.data.milk_ml, sleep_count,
-        (unsigned)(pee_count + poop_count), xigua_sleep_running(snapshot.data.sleep_end_epoch));
+        (unsigned)(pee_count + poop_count), xigua_sleep_running(snapshot.data.sleep_end_epoch),
+        snapshot.data.sleep_start_epoch);
     else if (s_home_panel) {
         lv_obj_delete(s_home_panel);
         s_home_panel = s_home_summary = NULL;
@@ -1363,7 +1502,7 @@ static void ui_timer_cb(lv_timer_t *timer)
     (void)timer;
     bool had_undo = s_undo.valid;
     bool undo_still_available = undo_available();
-    if (s_page == X_PAGE_ACTIVE && !s_confirm_abort) ui_refresh_page();
+    if ((s_page == X_PAGE_ACTIVE && !s_confirm_abort) || s_page == X_PAGE_TODAY) ui_refresh_page();
     else if (had_undo && !undo_still_available && s_page == X_PAGE_OVERVIEW) ui_refresh_page();
     else if (s_page == X_PAGE_SETTINGS ||
              (s_page == X_PAGE_WIFI && (s_wifi_ui_mode == X_WIFI_UI_STATUS ||
@@ -1467,6 +1606,7 @@ static void toggle_sleep(void)
     if (err == ESP_OK) {
         (void)ui_take_voice_undo();
         (void)xigua_text_copy(s_feedback, sizeof(s_feedback), reply);
+        go_page(sleeping ? X_PAGE_TODAY : X_PAGE_OVERVIEW, sleeping ? 1 : 3);
     } else snprintf(s_feedback, sizeof(s_feedback), "睡眠操作失败：%s", esp_err_to_name(err));
 }
 
@@ -1495,9 +1635,9 @@ static void finish_active(void)
         s_state.data.sleep_count++;
         s_state.data.sleep_end_epoch = (int64_t)time(NULL);
         if (elapsed > 0 && elapsed < 65535) s_state.data.sleep_minutes += (uint16_t)elapsed;
-        append_event_locked(X_EVENT_SLEEP, 0,
-                            elapsed > 0 && elapsed < 65535 ? (uint16_t)elapsed : 0, 0,
-                            s_state.data.sleep_end_epoch);
+        append_sleep_event_locked(s_state.data.sleep_start_epoch, s_state.data.sleep_end_epoch,
+                                 elapsed > 0 && elapsed < 65535 ? (uint16_t)elapsed : 0,
+                                 s_state.active_time_known);
     } else if (active == X_ACTIVE_TIMER) {
         s_state.data.timer_count++;
         append_event_locked(X_EVENT_TIMER, 0,
@@ -1685,6 +1825,14 @@ esp_err_t xigua_app_ai_response(const char *json)
 void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
     if (!s_running) return;
+    if (s_page == X_PAGE_TODAY && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) && ev != BSP_BTN_LONG) {
+        if (ev == BSP_BTN_PRESS && s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+            s_focus = xigua_menu_move(s_focus, sleep_page_count(&s_state.data), btn == BSP_BTN_DOWN);
+            xSemaphoreGive(s_mutex);
+            ui_sync();
+        }
+        return;
+    }
     if (s_page == X_PAGE_OVERVIEW && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) &&
         ev != BSP_BTN_LONG) {
         if (ev == BSP_BTN_PRESS) {
@@ -1861,17 +2009,13 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         else if (btn == BSP_BTN_OK) {
             if (s_focus == 0) s_feed_ml = s_state.data.milk_ml,
                 s_feed_ingredient = s_state.data.milk_ingredient, go_page(X_PAGE_FEED, 0);
-            else if (s_focus == 1) { toggle_sleep(); go_page(X_PAGE_OVERVIEW, 3); }
+            else if (s_focus == 1) toggle_sleep();
             else if (s_focus == 2) go_page(X_PAGE_DIAPER, 0);
             else if (s_focus == 3) save_simple_record(X_ACTIVE_BATH), go_page(X_PAGE_OVERVIEW, 0);
             else if (s_focus == 4) save_simple_record(X_ACTIVE_TUMMY), go_page(X_PAGE_OVERVIEW, 0);
             else go_page(X_PAGE_TIMER, 0);
             ui_sync();
             return;
-        }
-    } else if (s_page == X_PAGE_TODAY) {
-        if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
-            // The first version is a single summary page; retain the buttons as a no-op.
         }
     } else if (s_page == X_PAGE_SOUND) {
         if (btn == BSP_BTN_UP) s_focus = (s_focus + 2) % 3;

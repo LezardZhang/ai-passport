@@ -96,14 +96,20 @@ The diaper page has only Pee and Poop. It writes a local event immediately; voic
 can add colour, consistency, or notes later. Sleep is a background session:
 the Overview card changes between Start sleep and End sleep. Leaving Overview,
 feeding, voice requests, and the separate timer do not interrupt it. Ending
-stores one event with start/end and calculated duration. Within one boot the
+stores one event with the exact start timestamp, exact end timestamp, and
+calculated duration. The active card shows the start date and time; Today uses
+UP/DOWN pages for the active session and the newest completed sleep records.
+Within one boot the
 duration uses monotonic time; after reboot it uses trusted timestamps, otherwise
 reports duration uncalibrated. Bath and tummy time remain one-shot events.
 
-The existing persisted end timestamp uses `-1` to mark a running sleep; NVS
-structure size and magic stay unchanged. Older active-sleep state migrates on
-load. Earlier firmware can read the record layout but does not recognize this
-background-session marker when rolling back.
+The existing persisted end timestamp uses `-1` to mark a running sleep; the
+original state blob remains unchanged. Exact start/end pairs are kept in a
+separate versioned NVS blob keyed to the existing event ring, so rollback can
+still read the original records. Older active-sleep state migrates on load;
+older firmware does not recognize this extra timing blob or the background
+session marker when rolling back. Records created before this change show an
+unknown start time unless the latest legacy session can be safely backfilled.
 
 Saving enters a short `Saving` state. Success shows `Recorded 150 ml` and a
 five-second undo. Failure shows retry and back; the authoritative counters are
