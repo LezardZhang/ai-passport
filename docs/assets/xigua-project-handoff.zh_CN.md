@@ -59,8 +59,9 @@
 - 固件构建：PASS。ESP-IDF 5.5.3 已生成 ESP32-C3 应用、bootloader、分区表和应用二进制。由于仓库路径含中文字符，当前主机的 `ldgen` 无法正确解析该路径，因此将同一工作树复制到只含 ASCII 字符的临时路径完成构建。
 - 合并固件：PASS。`idf.py merge-bin` 已完成，`tools/verify_firmware.py` 已校验三个镜像、分区表、8 MB Flash 边界和 factory 应用位置。
 - 完整静态门禁：NOT RUN，当前 PowerShell 主机没有可用 Bash 和 Host C 编译器，无法运行 `tools/validate.sh --static`。
-- 真机刷写与启动：PASS。COM6 已确认是 USB ESP32-C3；bootloader、分区表和应用分别写入 `0x0`、`0x8000`、`0x10000` 并由 esptool 校验。设备成功启动新应用并完成 Wi‑Fi 扫描，发现 16 个网络后进入本机搜索流程。没有执行整片擦除。
-- 本次最新固件的真机界面/Wi‑Fi 密码输入、MiMo 请求和语音请求：NOT RUN，仍需按键操作并连接可用 Wi‑Fi；此前刷入的镜像早于共享 MiMo 头文件和最新 UI 修改。
+- 本次真机刷写与启动：PASS。源码检查点为 `35034b86b169215ecad68e4fdf5a8cd05838f180`；COM6 的 ESP32-C3 已刷入上方归档中的分段镜像，写入哈希校验通过，NVS 保留。40 秒启动观察确认应用正常启动，扫描到 10 个网络并优先尝试内置 `GUANTANG_2.4G`。
+- 本次真机 Wi‑Fi：FAIL。关联阶段返回 `reason=4`，随后进入本机搜索流程，未取得 IP；因此 MiMo 请求未运行。源码版本、镜像、ELF 和 MAP 已保留供恢复和排查。
+- 本次最新固件的真机界面／密码输入、MiMo 请求和语音请求：NOT RUN，仍需按键观察以及成功联网。
 
 下一步应执行剩余真机验收：完成搜索/选择/密码输入，修改凭据后重连，运行 MiMo 自检，并完成一次实际语音请求。`git status` 中原有的额度练习未跟踪文件需要继续保留。
 

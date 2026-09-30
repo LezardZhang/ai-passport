@@ -59,8 +59,9 @@ Validation for this checkpoint:
 - Firmware build: PASS. ESP-IDF 5.5.3 built the ESP32-C3 application, bootloader, partition table, and binary. Because the repository path contains Chinese characters and `ldgen` cannot resolve that path on this host, the same worktree was copied to an ASCII-only temporary path for the build.
 - Merged firmware: PASS. `idf.py merge-bin` completed and `tools/verify_firmware.py` verified all three images, the partition table, the 8 MB flash bound, and the factory application placement.
 - Full static gate: NOT RUN. `tools/validate.sh --static` could not run from this PowerShell host because Bash and a host C compiler are unavailable.
-- Device flash and boot: PASS. COM6 was identified as the USB ESP32-C3; bootloader, partition table, and application were written at `0x0`, `0x8000`, and `0x10000` with esptool verification. The device booted the new app and completed a Wi-Fi scan with 16 results, then entered the local search flow. No full-chip erase was used.
-- Device UI/Wi-Fi credential entry, MiMo request, and voice request for this latest build: NOT RUN. They still require button interaction and a reachable Wi-Fi network; the previous flashed image predates the shared MiMo header and latest UI changes.
+- Latest device flash and boot: PASS. Source checkpoint: `35034b86b169215ecad68e4fdf5a8cd05838f180`. The COM6 ESP32-C3 was flashed with segmented images from the archive above; write hashes passed and NVS was retained. A 40-second startup observation confirmed application boot, a scan with 10 networks, and an automatic attempt at built-in `GUANTANG_2.4G`.
+- Latest device Wi-Fi: FAIL. Association returned `reason=4`, then the device entered local network search without obtaining an IP; MiMo requests therefore did not run. Source, image, ELF, and MAP are retained for restoration and diagnosis.
+- Device UI/password entry, MiMo request, and voice request for this latest build: NOT RUN. They still require button observation and a successful connection.
 
 Next, run the remaining device acceptance sequence: scan/select/password entry, reconnect after credential changes, MiMo self-check, and a real voice request. Preserve the pre-existing untracked quota files listed by `git status`.
 
