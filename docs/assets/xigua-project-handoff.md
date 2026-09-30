@@ -285,10 +285,10 @@ the existing record-command path.
 The implementation and host contract check are complete. Build, device flash,
 and physical speaker playback are intentionally separated in this turn because
 the owner requested a Git-only delivery. Build and archive verification PASS:
-application size 5,779,504 bytes, factory free 0x6cfd0 bytes, full-image
-SHA-256 `fbec5a1e7355d1b8034c597212e95734333f549cc974bfde436809cb72464f4c`,
-matching ELF SHA-256 `7211639a1701f89bc84b2e2c30a6e00598a51ccd646b32c4d0f3288257068151`,
-archive `build/firmware/fbec5a1e7355d1b8034c597212e95734333f549cc974bfde436809cb72464f4c/`.
+application size 5,779,552 bytes, factory free 0x6cfa0 bytes, full-image
+SHA-256 `bf47d6ff4e5b3ad8acdf75460372fbae692647d93393ff0d404eeff6f528c5ec`,
+matching ELF SHA-256 `ca2ac7ded0b520c079629f7f39e1bd36b3a1907530312ab6c9fb847efdf7eed0`,
+archive `build/firmware/bf47d6ff4e5b3ad8acdf75460372fbae692647d93393ff0d404eeff6f528c5ec/`.
 The source was not flashed. The next device test should use a short story request,
 verify speaker output and cancellation/re-entry behavior, and then check a normal
 AI reply to confirm it remains text-only.

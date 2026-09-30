@@ -559,6 +559,10 @@ static esp_err_t tts_stream(const char *text)
     size_t line_length = 0;
     if (!pcm || !line) err = ESP_ERR_NO_MEM;
     while (err == ESP_OK && !done) {
+        if (s_voice_stop) {
+            err = ESP_ERR_INVALID_STATE;
+            break;
+        }
         char chunk[1024];
         int count = esp_http_client_read(client, chunk, sizeof(chunk));
         if (count < 0) {
@@ -567,6 +571,10 @@ static esp_err_t tts_stream(const char *text)
         }
         if (count == 0) break;
         for (int i = 0; i < count && err == ESP_OK; ++i) {
+            if (s_voice_stop) {
+                err = ESP_ERR_INVALID_STATE;
+                break;
+            }
             char ch = chunk[i];
             if (ch == '\n') {
                 line[line_length] = '\0';

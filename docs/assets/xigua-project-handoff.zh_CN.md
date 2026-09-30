@@ -226,10 +226,10 @@ NVS 和 `voice_tmp`。启动后自动连接内置 `GUANTANG_2.4G`，取得 `192.
 播放期间页面显示“正在播放故事”。普通 AI 回复仍只显示文字，本次没有改变记录 JSON 路径。
 
 实现和主机契约检查已完成。本轮按所有者要求只交付 Git，不刷机，也不做实机扬声器验收。
-固件构建和归档校验 PASS：应用大小 5,779,504 字节，factory 余量 `0x6cfd0` 字节，
-合并镜像 SHA-256 为 `fbec5a1e7355d1b8034c597212e95734333f549cc974bfde436809cb72464f4c`，
-匹配 ELF SHA-256 为 `7211639a1701f89bc84b2e2c30a6e00598a51ccd646b32c4d0f3288257068151`，
-归档为 `build/firmware/fbec5a1e7355d1b8034c597212e95734333f549cc974bfde436809cb72464f4c/`。
+固件构建和归档校验 PASS：应用大小 5,779,552 字节，factory 余量 `0x6cfa0` 字节，
+合并镜像 SHA-256 为 `bf47d6ff4e5b3ad8acdf75460372fbae692647d93393ff0d404eeff6f528c5ec`，
+匹配 ELF SHA-256 为 `ca2ac7ded0b520c079629f7f39e1bd36b3a1907530312ab6c9fb847efdf7eed0`，
+归档为 `build/firmware/bf47d6ff4e5b3ad8acdf75460372fbae692647d93393ff0d404eeff6f528c5ec/`。
 源码没有刷入设备。下一次真机测试应先说一段短故事，确认扬声器播放以及取消／再次进入行为，
 再确认普通 AI 回复仍保持文字显示。
 

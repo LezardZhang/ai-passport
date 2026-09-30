@@ -1932,7 +1932,10 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             snprintf(s_ai_error, sizeof(s_ai_error), "%s", s_feedback);
             x_ai_complete(&s_ai_ui, false);
         } else if (effect == X_AI_STOP_VOICE) xigua_ai_stop_voice();
-        else if (effect == X_AI_HOME) go_page(X_PAGE_OVERVIEW, 0);
+        else if (effect == X_AI_HOME) {
+            if (s_ai_request_pending) xigua_ai_stop_voice();
+            go_page(X_PAGE_OVERVIEW, 0);
+        }
         if (input == X_AI_OK && s_ai_ui.view == X_AI_READY && s_ai_ui.focus == 1 &&
             !s_ai_ui.has_reply) snprintf(s_feedback, sizeof(s_feedback), "暂无回复");
         ui_refresh_page();
