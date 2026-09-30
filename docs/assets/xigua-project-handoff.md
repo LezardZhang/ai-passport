@@ -123,16 +123,22 @@ Matching ELF SHA-256:
 Reply protection, recording transitions, paging bounds, UTF-8, NOR/WAV capture,
 full-font and new fixed-label coverage checks PASS. Repository checks PASS;
 the complete gate remains blocked by the Windows actionlint installer.
+COM6 segmented flashing and write hashes PASS, preserving NVS and voice data.
+Source checkpoint: `4499fdac399ae4c79400b7cab36cee7b078be6a3`. The startup
+ELF prefix `8df4d818b` matches the archive. Automatic built-in Wi-Fi connected
+and obtained an IP at about ten seconds; public HTTPS and MiMo text self-check
+returned HTTP 200 / `ESP_OK`. Initial TLS heap: 124,160 bytes free, largest
+106,496 bytes. No reboot or allocation failure appeared in the bounded log.
 Physical acceptance of the redesigned page is pending.
 
 ## Remaining work
 
-The font coverage is improved, but the text is still too small for comfortable use on the 240x320 display. The menu hierarchy, focus indication, back navigation, and bottom hint line need a deliberate redesign rather than more labels. Long model replies need scrolling or paging and UTF-8-safe truncation.
+The font coverage is improved, but the text is still too small for comfortable use on the 240x320 display. The menu hierarchy, focus indication, back navigation, and bottom hint line need a deliberate redesign rather than more labels. The AI page now has paging and UTF-8-safe truncation; replies beyond 1024 bytes and the visual quality of the reader still need review.
 
 The voice path needs a real short-phrase test, then 20–30 second and 60 second recordings, with capture duration, free heap, ASR status, transcript length, and model reply recorded. TTS playback and audio format conversion are not implemented. The automatic self-check intentionally avoids ASR and TTS usage; a user-controlled deep check should be added later.
 
-Add host tests for the Wi-Fi and voice state machines and an automated glyph-inventory check. Repeated boots should be tested against the same access point to quantify the first-attempt authentication failure rate.
+Keep extending the existing Wi-Fi, voice, AI interaction, and glyph-coverage regressions when new behavior is added. Repeated boots should be tested against the same access point to quantify the first-attempt authentication failure rate.
 
 ## Handoff steps
 
-Read `AGENTS.md`, the five required passport skills, the Wi-Fi provisioning guide, and this document before changing the firmware. This private repository may use the owner-authorized tracked Wi-Fi and MiMo configuration; do not print those values in logs or handoff text. Run `./tools/validate.sh --static`, `./tools/validate.sh --firmware`, and the complete gate before delivery. For a device run, capture serial logs from boot through IP acquisition, health check, and voice request; flash the verified `full.bin` at `0x0` only after reviewing the resulting build archive.
+Read `AGENTS.md`, the five required passport skills, the Wi-Fi provisioning guide, and this document before changing the firmware. This private repository may use the owner-authorized tracked Wi-Fi and MiMo configuration; do not print those values in logs or handoff text. Run `./tools/validate.sh --static`, `./tools/validate.sh --firmware`, and the complete gate before delivery. For a device run, capture serial logs from boot through IP acquisition, health check, and voice request; save a Git checkpoint and verify the matching archive before flashing. Use its component images at the recorded offsets to preserve NVS and recording data under the standing flash authorization.
