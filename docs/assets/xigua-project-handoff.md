@@ -236,11 +236,11 @@ Matching ELF SHA-256:
 The source/configuration checkpoint is created before the authorized segmented
 COM6 write, preserving NVS and voice data.
 
-Source checkpoint: `13a36def9f4a41684b10cd62116d9ba41a69c781`.
+Source checkpoint: `abd4dba73cc77bb3302f2efb8b3c9846560329f2`.
 COM6 segmented flashing and write hashes PASS. A bounded startup observation
-matched ELF prefix `a079e0897`, connected the built-in Wi-Fi and obtained IP at
-about ten seconds. Public HTTPS and MiMo text self-check returned HTTP 200 /
-`ESP_OK`. Initial TLS heap: 110,444 bytes free, largest block 98,304 bytes. No
+matched ELF prefix `3001c1968`, connected the built-in Wi-Fi and obtained IP at
+about eight seconds. Public HTTPS and MiMo text self-check returned HTTP 200 /
+`ESP_OK`. Initial TLS heap: 108,932 bytes free, largest block 94,208 bytes. No
 panic or allocation failure appeared in this window. Physical sleep navigation,
 voice record persistence and formatted reply rendering remain pending acceptance.
 
