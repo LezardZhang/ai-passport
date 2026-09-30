@@ -25,7 +25,11 @@
 #if defined(__has_include)
 #if __has_include("xigua_ai_credentials_local.h")
 #include "xigua_ai_credentials_local.h"
+#else
+#include "xigua_ai_credentials.h"
 #endif
+#else
+#include "xigua_ai_credentials.h"
 #endif
 
 #ifndef XIGUA_AI_BASE_URL
@@ -156,7 +160,8 @@ static esp_err_t build_request(const char *prompt, char **payload)
         return ESP_ERR_NO_MEM;
     }
     cJSON_AddStringToObject(root, "model", XIGUA_AI_CHAT_MODEL);
-    cJSON_AddNumberToObject(root, "max_completion_tokens", 256);
+    cJSON_AddNumberToObject(root, "max_tokens", 256);
+    cJSON_AddBoolToObject(root, "enable_thinking", false);
     cJSON_AddBoolToObject(root, "stream", false);
     cJSON_AddStringToObject(system, "role", "system");
     cJSON_AddStringToObject(system, "content",
@@ -203,6 +208,14 @@ static esp_err_t post_json(const char *payload, char *response, size_t response_
     };
     client = esp_http_client_init(&config);
     if (!client) { free(body_data); return ESP_ERR_NO_MEM; }
+    // MiMo deployments use the standard OpenAI bearer header. Keep the
+    // legacy api-key header as well so older token-plan gateways continue to
+    // accept existing device credentials.
+    char auth[320];
+    int auth_len = snprintf(auth, sizeof(auth), "Bearer %s", XIGUA_AI_API_KEY);
+    if (auth_len > 0 && (size_t)auth_len < sizeof(auth)) {
+        esp_http_client_set_header(client, "Authorization", auth);
+    }
     esp_http_client_set_header(client, "api-key", XIGUA_AI_API_KEY);
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, payload, (int)strlen(payload));
@@ -213,7 +226,11 @@ static esp_err_t post_json(const char *payload, char *response, size_t response_
              status, esp_err_to_name(err), (unsigned)body.length);
     if (err == ESP_OK && (status < 200 || status >= 300)) {
         ESP_LOGW(TAG, "MiMo HTTP status %d", status);
-        err = status == 401 ? ESP_ERR_INVALID_CRC : ESP_FAIL;
+        if (body.length > 0) {
+            size_t preview = body.length > 240 ? 240 : body.length;
+            ESP_LOGW(TAG, "MiMo error body=%.*s", (int)preview, body.data);
+        }
+        err = status == 401 || status == 403 ? ESP_ERR_INVALID_CRC : ESP_FAIL;
     }
     if (err == ESP_OK) {
         cJSON *root = cJSON_ParseWithLength(body.data, body.length);
@@ -287,7 +304,6 @@ static void wait_for_clock_sync(void)
 
 static xigua_ai_health_t run_health_check(void)
 {
-    (void)xigua_wifi_release_provisioning();
     ESP_LOGI(TAG, "background network/model self-check started free=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -465,6 +481,11 @@ static esp_err_t asr_stream(size_t wav_bytes, char *transcript, size_t transcrip
         if (!client) err = ESP_ERR_NO_MEM;
     }
     if (err == ESP_OK) {
+        char auth[320];
+        int auth_len = snprintf(auth, sizeof(auth), "Bearer %s", XIGUA_AI_API_KEY);
+        if (auth_len > 0 && (size_t)auth_len < sizeof(auth)) {
+            esp_http_client_set_header(client, "Authorization", auth);
+        }
         esp_http_client_set_header(client, "api-key", XIGUA_AI_API_KEY);
         esp_http_client_set_header(client, "Content-Type", "application/json");
         err = esp_http_client_open(client, (int)total);

@@ -9,7 +9,7 @@
 - Use an English imperative subject and Conventional Commit form: `type(scope): description`.
 - Use `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`, `build`, or `ci`. Keep the subject at most 72 characters and omit the final period.
 - Keep each commit independently reviewable. Describe the final diff, not the debugging journey.
-- Review the complete diff, run applicable checks, and exclude credentials, generated firmware, and unrelated files.
+- Review the complete diff, run applicable checks, follow the owner-authorized credential policy in [AGENTS.md](../../AGENTS.md), and exclude unrelated files and generated firmware.
 - Do not edit the paired changelog files in an ordinary feature, application, or documentation commit. Describe user-visible behavior, compatibility, and release-flow impact in the pull-request body; only a release-preparation change maintained before tagging aggregates those merged changes into both files.
 - Creating a commit does not authorize pushing, opening a PR, releasing, or merging.
 - Write durable product constraints, data formats, architecture decisions, and acceptance criteria back to their authoritative document. Do not preserve transient debugging notes.

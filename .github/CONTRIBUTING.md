@@ -17,7 +17,7 @@ second development; the fork conventions are in
   for the complete hardware context.
 - Follow [`CODE_OF_CONDUCT.md`](/.github/CODE_OF_CONDUCT.md) when participating in the
   community. For ordinary usage questions, see [`SUPPORT.md`](/.github/SUPPORT.md).
-- Do not commit credentials, tokens, authorization files, or personal data.
+- Follow the owner's private-repository credential policy in [`AGENTS.md`](/AGENTS.md); owner-authorized application credentials may be tracked in Git.
 - The repository's `main` branch stays in sync with the upstream baseline; fork
   users develop feature work in `feature/*` branches (see `docs/fork-guide.md`).
 
@@ -69,8 +69,8 @@ build as successful hardware validation.
 2. Use `<type>(<scope>): <short description>` for the pull request title, for
    example `feat(bsp): ...`, `docs: ...`. Available types are defined in
    [`docs/contribution/commit-and-pr.md`](/docs/contribution/commit-and-pr.md).
-3. Review the complete diff and confirm that it contains no credentials,
-   unrelated generated files, or unintended changes.
+3. Review the complete diff for compliance with the owner's credential policy,
+   unrelated generated files, and unintended changes.
 4. Follow the PR requirements in `docs/contribution/commit-and-pr.md`: state the
    hardware/revision tested, summarize behavior changes, list build and on-device
    results, link related issues, and record observed on-device results for pin,

@@ -97,5 +97,5 @@ Do not create empty document scaffolding without a concrete purpose. Register ad
 - Explain rationale, boundaries, failure modes, and validation instead of restating source code.
 - State product facts and public hardware interfaces directly; omit provenance and source-availability commentary.
 - Enforce automatable rules in `tools/` and CI as well as documentation.
-- Never commit credentials, tokens, keys, authorization files, private keys, personal data, internal endpoints, or unsanitized device QR parameters. Run `./tools/validate.sh --static` before committing.
+- Follow the owner's private-repository credential policy in [AGENTS.md](../../AGENTS.md). Owner-authorized application credentials may be stored in tracked configuration; local-only storage is optional. Avoid repeating credential values in documentation and logs. Run `./tools/validate.sh --static` before committing.
 - Preserve existing user changes and untracked files. Use recoverable deletion for user files, and confirm intent before deleting branches, tags, or remote references.

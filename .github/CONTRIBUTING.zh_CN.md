@@ -12,7 +12,7 @@
 - 先读 [`README.zh_CN.md`](/docs/README.zh_CN.md) 的硬件能力契约，以及
   [AI 硬件开发指南](/docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md) 的完整硬件上下文。
 - 参与社区时请遵守 [`CODE_OF_CONDUCT.zh_CN.md`](/.github/CODE_OF_CONDUCT.zh_CN.md)；普通使用问题见 [`SUPPORT.zh_CN.md`](/.github/SUPPORT.zh_CN.md)。
-- 不要提交凭证、令牌、授权文件或个人数据。
+- 遵循 [`AGENTS.zh_CN.md`](/AGENTS.zh_CN.md) 中所有者的私有仓库凭据规则；所有者授权的应用凭据可以由 Git 管理。
 - 仓库的 `main` 分支始终与上游基线保持同步；fork 用户在 `feature/*` 分支开发功能（见 `docs/fork-guide.md`）。
 
 ## 开发与验证
@@ -59,7 +59,7 @@ cc -std=c11 -Wall -Wextra -Werror -Imain \
 1. 从 `main` 创建短生命周期 `feature/*` 分支，保持一个 PR 只解决一个清晰的问题。
 2. PR 标题使用 `<type>(<scope>): <简短描述>`，例如 `feat(bsp): ...`、`docs: ...`。
    可用 type 见 [`docs/contribution/commit-and-pr.zh_CN.md`](/docs/contribution/commit-and-pr.zh_CN.md)。
-3. Review 完整 diff，确认没有凭证、无关生成文件或意外改动。
+3. Review 完整 diff，确认符合所有者的凭据规则，且没有无关生成文件或意外改动。
 4. 遵守 `docs/contribution/commit-and-pr.md` 的 PR 要求：说明测试的硬件/版本、
    行为变更摘要、构建与真机结果，链接相关 issue，并对引脚、显示旋转、codec 时钟、
    ADC、DMA 改动显式记录观察到的真机结果。

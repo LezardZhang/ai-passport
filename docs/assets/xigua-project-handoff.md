@@ -14,10 +14,10 @@ Near-term work is to finish device voice acceptance, make the three-button infor
 
 ## Implemented modules
 
-- `main/xigua_app.c` provides childcare records for feeding, diaper, sleep, bath, tummy time, and timers. Records are stored in NVS and the latest action can be undone. Wi-Fi has a status page, built-in-network status, manual SSID/password entry, and a three-page keyboard: uppercase, lowercase, and combined digits/symbols.
-- `main/xigua_wifi.c` stores the last successful station configuration, scans at boot, and tries the previous network before the three built-in networks. It falls back to manual or BLE provisioning when no candidate is visible. Authentication expiry, authentication failure, association failure, and handshake timeouts retry up to three attempts. Stale BSSID locks are cleared, PMF is optional, power save is disabled during connection, and successful credentials are persisted.
-- `main/xigua_ai.c` uses the configured OpenAI-compatible MiMo endpoint for text, ASR, and the model configuration list. Voice capture is 16 kHz, 16-bit, mono WAV written to the `voice_tmp` partition, with a maximum of 60 seconds and chunked Base64 upload. Capture runs in a worker task, so button callbacks stay non-blocking.
-- The AI worker runs an automatic health check after IP acquisition. It first performs a public HTTPS probe, waits for time synchronization, and then sends a minimal MiMo text request. BLUFI/NimBLE provisioning is stopped for the check and can be resumed from the Wi-Fi page, reclaiming heap for TLS. A successful result is cached for six hours; failures retry every two minutes.
+- `main/xigua_app.c` provides childcare records for feeding, diaper, sleep, bath, tummy time, and timers. Records are stored in NVS and the latest action can be undone. Wi-Fi has a status page and a “Search nearby Wi-Fi” action; the user selects an SSID from scan results and uses the three-page keyboard only for the password.
+- `main/xigua_wifi.c` stores the last successful station configuration, scans at boot, and tries the three built-in networks before the previous saved network. The owner-authorized built-in profiles are tracked in `main/xigua_wifi_credentials.h`. When no candidate is visible, the device exposes a local scan-and-select flow instead of Bluetooth provisioning. Authentication expiry, authentication failure, association failure, and handshake timeouts retry up to three attempts. Stale BSSID locks are cleared, PMF is optional, power save is disabled during connection, and successful credentials are persisted.
+- `main/xigua_ai.c` uses the configured OpenAI-compatible MiMo endpoint for text, ASR, and the model configuration list. `main/xigua_ai_credentials.h` stores the owner-authorized shared endpoint, key, and model settings so a fresh clone does not require repeating local setup. Voice capture is 16 kHz, 16-bit, mono WAV written to the `voice_tmp` partition, with a maximum of 60 seconds and chunked Base64 upload. Capture runs in a worker task, so button callbacks stay non-blocking.
+- The AI worker runs an automatic health check after IP acquisition. It first performs a public HTTPS probe, waits for time synchronization, and then sends a minimal MiMo text request. Bluetooth provisioning is no longer started, leaving more heap for Wi-Fi and TLS. A successful result is cached for six hours; failures retry every two minutes. MiMo requests send the standard Bearer header plus the legacy `api-key` header, and non-2xx responses retain a bounded body preview in the log.
 - `main/xigua_font_zh16.c` and `main/xigua_font_zh20.c` cover the current UI text, punctuation, and ASCII inventory. The larger font is used for primary Chinese text and recording/self-check messages. The LXGW WenKai license is kept beside the generated font.
 - `partitions.csv` reserves `voice_tmp` for temporary recordings while keeping the application within the 8 MB flash layout.
 
@@ -25,7 +25,7 @@ Near-term work is to finish device voice acceptance, make the three-button infor
 
 The repeated connection problem was not caused by an incorrect password alone. Serial logs showed the access point `Lezard2.4G` reaching WPA authentication and returning `WIFI_REASON_AUTH_EXPIRE (2)`. A retry then associated using WPA2-PSK and received `192.168.50.115`. This is consistent with a transient mixed WPA2/WPA3 authentication handshake. The application now retries and normalizes the station profile, but the access point should still be tested with a fixed WPA2-PSK profile if the first-attempt failure matters.
 
-The later `ESP_ERR_HTTP_CONNECT` error had a separate memory cause. BLUFI/NimBLE remained active while mbedTLS verified the RSA certificate, leaving an 18 KB largest heap block and producing an mbedTLS RSA allocation failure. Releasing provisioning before the health check increased the largest block to 32 KB. The latest secure run validated the certificate and completed both the HTTPS probe and MiMo request with `ESP_OK`. The final firmware does not skip certificate verification.
+The earlier `ESP_ERR_HTTP_CONNECT` error had a memory cause: Bluetooth provisioning competed with mbedTLS during RSA certificate verification. The current build does not start that service. Certificate verification remains enabled, and MiMo HTTP failures now log the status and a bounded response preview so network, authentication, and request-format failures can be distinguished.
 
 Normal flashing overwrites the bootloader, partition table, and factory application from `0x0`, but NVS at `0x9000` is retained. Use the Wi-Fi clear action when stored credentials are suspect. Do not erase the whole chip as a routine repair because it removes user records.
 
@@ -39,6 +39,31 @@ Normal flashing overwrites the bootloader, partition table, and factory applicat
 - Most recent flash confirmation: PASS. The device connected directly with WPA3-SAE on `Lezard2.4G`, obtained `192.168.50.115`, validated the certificate, and completed the MiMo self-check without an HTTP or TLS error.
 - Device voice ASR and TTS: NOT RUN end to end in this round. The capture and upload path is implemented, but a confirmed microphone phrase, ASR transcript, model reply, and speaker playback still need device acceptance.
 
+## Worktree checkpoint (2026-09-30)
+
+The latest Wi-Fi UI, built-in network, and shared MiMo configuration changes have passed compilation and merged-image verification. A local Git checkpoint is created before flashing. The earlier scan/select implementation was flashed with NVS preserved; the latest build is identified below.
+
+- Wi-Fi code was changed toward a device-only flow: boot scan and saved-network retry remain; the Wi-Fi page now searches nearby networks, lets the user select an SSID, and opens the soft keyboard for the password. Manual SSID entry and Bluetooth provisioning were removed from the Xigua path.
+- `main/xigua_wifi_security.c` and its header were removed from the Xigua build, and the NimBLE/BLUFI defaults and component dependency were removed from the application configuration. The reference baseline BLE demo files were not changed.
+- MiMo requests now add the standard `Authorization: Bearer` header while retaining `api-key` compatibility, use `max_tokens` and `enable_thinking=false`, and log a bounded error-response preview for non-2xx replies. This is a code change, not a device-confirmed fix for the reported `ESP_FAIL`.
+- Documentation was updated to describe the scan/select/password flow and the removal of Bluetooth provisioning.
+- The Wi-Fi body uses 16 px text and a taller hint area; keyboard focus uses `< >` and mode/operation controls occupy separate rows. UI wording avoids the observed missing Chinese glyphs.
+- The owner grants standing flash authorization: save a local Git source checkpoint and matching firmware/ELF/MAP before writing, then flash directly with NVS preserved. No per-flash approval is required.
+
+Validation for this checkpoint:
+
+- Verified merged-image SHA-256: `DB213323011A34E496F35DA5BD7AA8672421C5C345F0412FAAF9DA3D6E1CBCB6`. Matching firmware/ELF/MAP are archived under `build/firmware/db213323011a34e496f35da5bd7aa8672421c5c345f0412faaf9da3d6e1cbcb6/`; the ASCII build directory is `C:/aihw_build_src/build/validation/`.
+- Repository check: PASS (`python tools/check_repo.py`).
+- Deep-sleep contract tests: PASS (`python tests/test_deep_sleep_contract.py`).
+- `tests/test_check_repo.py`: FAIL, five existing vendored-documentation assertions in `VendoredDocumentationTest`; this checkpoint did not modify those assertions.
+- Firmware build: PASS. ESP-IDF 5.5.3 built the ESP32-C3 application, bootloader, partition table, and binary. Because the repository path contains Chinese characters and `ldgen` cannot resolve that path on this host, the same worktree was copied to an ASCII-only temporary path for the build.
+- Merged firmware: PASS. `idf.py merge-bin` completed and `tools/verify_firmware.py` verified all three images, the partition table, the 8 MB flash bound, and the factory application placement.
+- Full static gate: NOT RUN. `tools/validate.sh --static` could not run from this PowerShell host because Bash and a host C compiler are unavailable.
+- Device flash and boot: PASS. COM6 was identified as the USB ESP32-C3; bootloader, partition table, and application were written at `0x0`, `0x8000`, and `0x10000` with esptool verification. The device booted the new app and completed a Wi-Fi scan with 16 results, then entered the local search flow. No full-chip erase was used.
+- Device UI/Wi-Fi credential entry, MiMo request, and voice request for this latest build: NOT RUN. They still require button interaction and a reachable Wi-Fi network; the previous flashed image predates the shared MiMo header and latest UI changes.
+
+Next, run the remaining device acceptance sequence: scan/select/password entry, reconnect after credential changes, MiMo self-check, and a real voice request. Preserve the pre-existing untracked quota files listed by `git status`.
+
 ## Remaining work
 
 The font coverage is improved, but the text is still too small for comfortable use on the 240x320 display. The menu hierarchy, focus indication, back navigation, and bottom hint line need a deliberate redesign rather than more labels. Long model replies need scrolling or paging and UTF-8-safe truncation.
@@ -49,4 +74,4 @@ Add host tests for the Wi-Fi and voice state machines and an automated glyph-inv
 
 ## Handoff steps
 
-Read `AGENTS.md`, the five required passport skills, the Wi-Fi provisioning guide, and this document before changing the firmware. Keep credentials in ignored local headers. Run `./tools/validate.sh --static`, `./tools/validate.sh --firmware`, and the complete gate before delivery. For a device run, capture serial logs from boot through IP acquisition, health check, and voice request; flash the verified `full.bin` at `0x0` only after reviewing the resulting build archive.
+Read `AGENTS.md`, the five required passport skills, the Wi-Fi provisioning guide, and this document before changing the firmware. This private repository may use the owner-authorized tracked Wi-Fi and MiMo configuration; do not print those values in logs or handoff text. Run `./tools/validate.sh --static`, `./tools/validate.sh --firmware`, and the complete gate before delivery. For a device run, capture serial logs from boot through IP acquisition, health check, and voice request; flash the verified `full.bin` at `0x0` only after reviewing the resulting build archive.

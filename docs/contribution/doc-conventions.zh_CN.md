@@ -93,9 +93,9 @@ VENDORED_DOC_ROOTS: tuple[str, ...] = (
 
 ## 内容安全
 
-凭证、令牌、密钥、授权文件、私钥、个人数据和内部 endpoint 不得进入仓库或 Git 历史。提交前运行 `./tools/validate.sh --static`；发现疑似凭证时停止提交并改用环境变量或系统钥匙串。误提交后必须私下报告并轮换凭证，仅删除工作区文件不能消除 Git 历史中的泄露。
+凭据存储遵循 [AGENTS.zh_CN.md](../../AGENTS.zh_CN.md) 中所有者的私有仓库规则。所有者授权的应用凭据可以保存到由 Git 管理的配置中；仅本机存储属于可选方式。文档和日志避免重复输出凭据值。提交前运行 `./tools/validate.sh --static`。
 
-设备二维码链接的 `s`、`k` 参数属于敏感标识，不得写入代码、配置、文档、示例、测试、日志或 commit message。文档只能使用明显脱敏的形式：
+设备二维码链接的 `s`、`k` 参数同样遵循所有者授权；普通文档示例使用占位符：
 
 ```text
 https://ai-passport.folotoy.cn/trae/?s=<secret>&k=<key>

@@ -32,28 +32,13 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=24
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
 
-# --- Bluetooth LE / NimBLE ---
-# ESP32-C3 仅支持 BLE；示例只启用单连接 peripheral 所需的最小 host 配置。
-CONFIG_BT_ENABLED=y
-CONFIG_BT_NIMBLE_ENABLED=y
-CONFIG_BT_NIMBLE_BLUFI_ENABLE=y
-CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
-CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
-CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
-CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
-CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY=n
-CONFIG_BT_NIMBLE_NVS_PERSIST=n
-
-# BLUFI security uses the mbedTLS Diffie-Hellman module.
-CONFIG_MBEDTLS_DHM_C=y
 # Allow mbedTLS to use the normal ESP heap on this no-PSRAM target. The
 # internal-only allocator can leave a usable 4-8 KiB block unavailable after
-# LVGL and NimBLE start, which makes certificate verification fail.
+# LVGL starts, which makes certificate verification fail.
 CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=n
 CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
 # Keep TLS buffers off the permanent heap on the no-PSRAM ESP32-C3. This lets
-# the automatic HTTPS/MiMo self-check coexist with LVGL and NimBLE.
+# the automatic HTTPS/MiMo self-check coexist with LVGL.
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096

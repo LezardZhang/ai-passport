@@ -50,8 +50,8 @@ typedef enum {
 
 typedef enum {
     X_WIFI_UI_MENU = 0,
+    X_WIFI_UI_SCAN,
     X_WIFI_UI_STATUS,
-    X_WIFI_UI_EDIT_SSID,
     X_WIFI_UI_EDIT_PASSWORD,
 } x_wifi_ui_mode_t;
 
@@ -197,6 +197,7 @@ static char s_wifi_input_password[65];
 static size_t s_wifi_input_len;
 static x_wifi_keyboard_mode_t s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
 static size_t s_wifi_keyboard_index;
+static size_t s_wifi_scan_index;
 
 static const char *const WIFI_KEYBOARD_CHARS[] = {
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
@@ -204,7 +205,7 @@ static const char *const WIFI_KEYBOARD_CHARS[] = {
     "0123456789 !@#$%^&*()-_=+[]{};:'\\\",.<>/?\\|`~",
 };
 static const char *const WIFI_KEYBOARD_ACTIONS[] = {
-    "大写", "小写", "数字/符号", "退格", "确认",
+    "大写", "小写", "数字", "退格", "完成",
 };
 
 static const uint16_t TIMER_OPTIONS[] = { 5, 10, 20, 30 };
@@ -573,8 +574,7 @@ static const char *wifi_state_name(xigua_wifi_state_t state)
     switch (state) {
     case XIGUA_WIFI_CONNECTED: return "已连接";
     case XIGUA_WIFI_CONNECTING: return "连接中";
-    case XIGUA_WIFI_ADVERTISING: return "等待配网";
-    case XIGUA_WIFI_BLE_CONNECTED: return "手机已连接";
+    case XIGUA_WIFI_READY: return "等待选择网络";
     case XIGUA_WIFI_STARTING: return "启动中";
     case XIGUA_WIFI_FAILED: return "连接失败";
     default: return "未连接";
@@ -599,6 +599,7 @@ static void wifi_ui_clear_input(void)
     s_wifi_input_len = 0;
     s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
     s_wifi_keyboard_index = 0;
+    s_wifi_scan_index = 0;
 }
 
 static void wifi_ui_enter_menu(void)
@@ -608,14 +609,37 @@ static void wifi_ui_enter_menu(void)
     s_focus = 0;
 }
 
-static void wifi_ui_begin_edit(bool password)
+static void wifi_ui_begin_password(void)
 {
-    s_wifi_ui_mode = password ? X_WIFI_UI_EDIT_PASSWORD : X_WIFI_UI_EDIT_SSID;
+    s_wifi_ui_mode = X_WIFI_UI_EDIT_PASSWORD;
     s_wifi_input_len = 0;
     s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
     s_wifi_keyboard_index = 0;
-    if (password) memset(s_wifi_input_password, 0, sizeof(s_wifi_input_password));
-    else memset(s_wifi_input_ssid, 0, sizeof(s_wifi_input_ssid));
+    memset(s_wifi_input_password, 0, sizeof(s_wifi_input_password));
+}
+
+static void wifi_ui_start_scan(void)
+{
+    s_wifi_scan_index = 0;
+    s_wifi_ui_mode = X_WIFI_UI_SCAN;
+    if (xigua_wifi_scan() != ESP_OK) {
+        snprintf(s_feedback, sizeof(s_feedback), "扫描无法开始，请重试");
+    } else {
+        snprintf(s_feedback, sizeof(s_feedback), "正在扫描附近 Wi-Fi");
+    }
+}
+
+static void wifi_ui_select_scan(void)
+{
+    size_t count = xigua_wifi_scan_count();
+    if (count == 0 || s_wifi_scan_index >= count) {
+        snprintf(s_feedback, sizeof(s_feedback), "无可用 Wi-Fi，请重新扫描");
+        return;
+    }
+    snprintf(s_wifi_input_ssid, sizeof(s_wifi_input_ssid), "%s",
+             xigua_wifi_scan_ssid(s_wifi_scan_index));
+    wifi_ui_begin_password();
+    snprintf(s_feedback, sizeof(s_feedback), "请输入 %s 的密码", s_wifi_input_ssid);
 }
 
 static const char *wifi_keyboard_chars(void)
@@ -640,45 +664,33 @@ static void wifi_ui_move_key(int delta)
 
 static void wifi_ui_append_char(char value)
 {
-    size_t limit = s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ?
-        sizeof(s_wifi_input_ssid) - 1 : sizeof(s_wifi_input_password) - 1;
+    size_t limit = sizeof(s_wifi_input_password) - 1;
     if (s_wifi_input_len >= limit) {
         snprintf(s_feedback, sizeof(s_feedback), "已达到长度上限");
         return;
     }
-    char *buffer = s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ?
-        s_wifi_input_ssid : s_wifi_input_password;
+    char *buffer = s_wifi_input_password;
     buffer[s_wifi_input_len++] = value;
     buffer[s_wifi_input_len] = '\0';
 }
 
 static void wifi_ui_backspace(void)
 {
-    char *buffer = s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ?
-        s_wifi_input_ssid : s_wifi_input_password;
+    char *buffer = s_wifi_input_password;
     if (s_wifi_input_len == 0) return;
     buffer[--s_wifi_input_len] = '\0';
 }
 
 static void wifi_ui_finish_edit(void)
 {
-    if (s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID) {
-        if (s_wifi_input_len == 0) {
-            snprintf(s_feedback, sizeof(s_feedback), "SSID不能为空");
-            return;
-        }
-        s_wifi_ui_mode = X_WIFI_UI_EDIT_PASSWORD;
-        s_wifi_input_len = 0;
-        s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
-        s_wifi_keyboard_index = 0;
-        memset(s_wifi_input_password, 0, sizeof(s_wifi_input_password));
-        snprintf(s_feedback, sizeof(s_feedback), "请输入密码，开放网络可直接长按确认");
+    if (s_wifi_input_ssid[0] == '\0') {
+        snprintf(s_feedback, sizeof(s_feedback), "请先扫描并选择 Wi-Fi");
         return;
     }
     esp_err_t err = xigua_wifi_set_credentials(s_wifi_input_ssid, s_wifi_input_password);
     if (err == ESP_OK) err = xigua_wifi_connect();
     s_wifi_ui_mode = X_WIFI_UI_STATUS;
-    if (err == ESP_OK) snprintf(s_feedback, sizeof(s_feedback), "正在连接手动输入的 Wi-Fi");
+    if (err == ESP_OK) snprintf(s_feedback, sizeof(s_feedback), "正在连接已选 Wi-Fi");
     else snprintf(s_feedback, sizeof(s_feedback), "连接启动失败：%s", esp_err_to_name(err));
     memset(s_wifi_input_password, 0, sizeof(s_wifi_input_password));
 }
@@ -772,7 +784,7 @@ static void ui_shell(void)
     s_battery = make_label(s_screen, 188, 12, 40, 22, "--%", 0xB9C7D1, 14);
     s_body = make_label(s_screen, 18, 54, 204, 190, "正在加载…", 0xFFFFFF, 20);
     s_status = make_label(s_screen, 18, 246, 204, 28, "", 0x69D2E7, 14);
-    s_hint = make_label(s_screen, 14, 278, 212, 32, "上/下选择  确认键打开", 0xB9C7D1, 14);
+    s_hint = make_label(s_screen, 14, 274, 212, 42, "上/下选择  确认键打开", 0xB9C7D1, 14);
     lv_screen_load(s_screen);
 }
 
@@ -784,6 +796,15 @@ static void ui_set_title(const char *title)
 static void ui_set_hint(const char *hint)
 {
     if (s_hint) lv_label_set_text(s_hint, hint);
+}
+
+static void ui_set_body_font(uint16_t size)
+{
+    if (!s_body) return;
+    const lv_font_t *font = size >= 18 ? &s_xigua_font20 : &s_xigua_font;
+    lv_obj_set_style_text_font(s_body,
+                               s_xigua_font_ready ? font : &xigua_font_zh16,
+                               LV_PART_MAIN);
 }
 
 static bool ai_request_current_mode(void)
@@ -957,64 +978,89 @@ static void ui_refresh_page(void)
         break;
     case X_PAGE_WIFI:
         if (s_wifi_ui_mode == X_WIFI_UI_MENU) {
-            const size_t item_count = 2;
+            const size_t item_count = 1;
             ui_set_title("Wi-Fi设置");
             int used = snprintf(text, sizeof(text), "状态：%s\n自检：%s\n\n",
                                 wifi_state_name(xigua_wifi_state()),
                                 ai_health_name(xigua_ai_health()));
-            const char *labels[] = { "手动输入 Wi-Fi", "蓝牙配网" };
+            const char *labels[] = { "扫描附近 Wi-Fi" };
             for (size_t i = 0; i < item_count && used > 0 && (size_t)used < sizeof(text); i++) {
                 used += snprintf(text + used, sizeof(text) - (size_t)used, "%c %s\n",
                                  s_focus == i ? '>' : ' ', labels[i]);
             }
             ui_set_hint("上/下选择  确认键进入  长按下键返回");
-        } else if (s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ||
-                   s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
-            bool password = s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD;
-            const char *value = password ? s_wifi_input_password : s_wifi_input_ssid;
-            char masked[65] = { 0 };
-            if (password) {
-                for (size_t i = 0; i < s_wifi_input_len && i + 1 < sizeof(masked); i++) {
-                    masked[i] = '*';
+        } else if (s_wifi_ui_mode == X_WIFI_UI_SCAN) {
+            ui_set_title("选择 Wi-Fi");
+            if (xigua_wifi_scan_in_progress()) {
+                snprintf(text, sizeof(text), "正在扫描附近网络…\n请等待");
+            } else if (xigua_wifi_scan_count() == 0) {
+                snprintf(text, sizeof(text), "无可用 Wi-Fi\n请重新扫描");
+            } else {
+                int used = snprintf(text, sizeof(text), "网络数 %u\n\n",
+                                    (unsigned)xigua_wifi_scan_count());
+                for (size_t i = 0; i < xigua_wifi_scan_count() && i < 8 &&
+                     used > 0 && (size_t)used < sizeof(text); ++i) {
+                    used += snprintf(text + used, sizeof(text) - (size_t)used,
+                                     "%c %s (%d)\n", s_wifi_scan_index == i ? '>' : ' ',
+                                     xigua_wifi_scan_ssid(i), xigua_wifi_scan_rssi(i));
                 }
-                masked[s_wifi_input_len] = '\0';
-                value = masked;
             }
+            ui_set_hint("上/下选择  确认输入密码  长按下键返回");
+        } else if (s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
+            const char *value = s_wifi_input_password;
+            char masked[65] = { 0 };
+            for (size_t i = 0; i < s_wifi_input_len && i + 1 < sizeof(masked); i++) {
+                masked[i] = '*';
+            }
+            masked[s_wifi_input_len] = '\0';
+            value = masked;
             const char *keys = wifi_keyboard_chars();
             size_t key_count = strlen(keys);
             size_t action_count = sizeof(WIFI_KEYBOARD_ACTIONS) /
                 sizeof(WIFI_KEYBOARD_ACTIONS[0]);
             size_t selected_action = s_wifi_keyboard_index >= key_count ?
                 s_wifi_keyboard_index - key_count : SIZE_MAX;
-            ui_set_title(password ? "输入 Wi-Fi 密码" : "输入 Wi-Fi 名称");
-            int used = snprintf(text, sizeof(text), "%s\n已输入：%s\n",
-                                password ? "密码" : "SSID", value[0] ? value : "(空)");
+            ui_set_title("输入 Wi-Fi 密码");
+            int used = snprintf(text, sizeof(text), "SSID：%s\n密码：%s\n",
+                                s_wifi_input_ssid[0] ? s_wifi_input_ssid : "(未选择)",
+                                value[0] ? value : "(空)");
             for (size_t i = 0; i < key_count && used > 0 && (size_t)used < sizeof(text); i++) {
-                used += snprintf(text + used, sizeof(text) - (size_t)used, "%c%c ",
-                                 s_wifi_keyboard_index == i ? '[' : ' ', keys[i]);
+                if (s_wifi_keyboard_index == i) {
+                    used += snprintf(text + used, sizeof(text) - (size_t)used,
+                                     "<%c> ", keys[i]);
+                } else {
+                    used += snprintf(text + used, sizeof(text) - (size_t)used,
+                                     " %c  ", keys[i]);
+                }
                 if (i % 6 == 5) used += snprintf(text + used, sizeof(text) - (size_t)used, "\n");
             }
             if (used > 0 && (size_t)used < sizeof(text)) {
-                used += snprintf(text + used, sizeof(text) - (size_t)used, "\n");
+                used += snprintf(text + used, sizeof(text) - (size_t)used, "\n模式 ");
             }
-            for (size_t i = 0; i < action_count && used > 0 && (size_t)used < sizeof(text); i++) {
-                used += snprintf(text + used, sizeof(text) - (size_t)used, "%c%s%c ",
-                                 selected_action == i ? '[' : ' ', WIFI_KEYBOARD_ACTIONS[i],
-                                 selected_action == i ? ']' : ' ');
+            for (size_t i = 0; i < 3 && i < action_count && used > 0 &&
+                 (size_t)used < sizeof(text); i++) {
+                used += snprintf(text + used, sizeof(text) - (size_t)used,
+                                 selected_action == i ? "<%s> " : "%s ",
+                                 WIFI_KEYBOARD_ACTIONS[i]);
             }
             if (used > 0 && (size_t)used < sizeof(text)) {
-                snprintf(text + used, sizeof(text) - (size_t)used, "\n长度：%u/%u",
-                         (unsigned)s_wifi_input_len, (unsigned)(password ? 64 : 32));
+                used += snprintf(text + used, sizeof(text) - (size_t)used, "\n操作 ");
+            }
+            for (size_t i = 3; i < action_count && used > 0 &&
+                 (size_t)used < sizeof(text); i++) {
+                used += snprintf(text + used, sizeof(text) - (size_t)used,
+                                 selected_action == i ? "<%s> " : "%s ",
+                                 WIFI_KEYBOARD_ACTIONS[i]);
+            }
+            if (used > 0 && (size_t)used < sizeof(text)) {
+                snprintf(text + used, sizeof(text) - (size_t)used, "\n长度：%u/64",
+                         (unsigned)s_wifi_input_len);
             }
             ui_set_hint("上/下移动键盘  确认键选择  长按确认完成  长按下键取消");
         } else {
             ui_set_title("Wi-Fi状态");
             if (xigua_wifi_state() == XIGUA_WIFI_CONNECTED) {
                 snprintf(text, sizeof(text), "已连接\n\nSSID：%s\nIP：%s", wifi_ssid, wifi_ip);
-            } else if (xigua_wifi_state() == XIGUA_WIFI_BLE_CONNECTED) {
-                snprintf(text, sizeof(text), "手机已连接\n\n请在配网小程序中选择\n%s", xigua_wifi_device_name());
-            } else if (xigua_wifi_state() == XIGUA_WIFI_ADVERTISING) {
-                snprintf(text, sizeof(text), "等待配网\n\n打开小程序：\n蓝牙配网-FoloToy\nAI PASSPORT\n设备：%s", xigua_wifi_device_name());
             } else {
                 snprintf(text, sizeof(text), "%s\n\nSSID：%s\nIP：%s",
                          wifi_state_name(xigua_wifi_state()), wifi_ssid[0] ? wifi_ssid : "--",
@@ -1027,6 +1073,7 @@ static void ui_refresh_page(void)
     if (s_page == X_PAGE_OVERVIEW && undo_available()) {
         ui_set_hint("确认键撤销最近记录  上/下选择");
     }
+    ui_set_body_font(s_page == X_PAGE_WIFI ? 16 : 20);
     lv_label_set_text(s_body, text);
     if (snapshot.battery_soc >= 0) lv_label_set_text_fmt(s_battery, "%d%%", snapshot.battery_soc);
     if (s_status) lv_label_set_text(s_status, s_feedback);
@@ -1041,7 +1088,8 @@ static void ui_timer_cb(lv_timer_t *timer)
     else if (had_undo && !undo_still_available && s_page == X_PAGE_OVERVIEW) ui_refresh_page();
     else if (s_page == X_PAGE_SETTINGS ||
              (s_page == X_PAGE_WIFI && (s_wifi_ui_mode == X_WIFI_UI_STATUS ||
-                                        s_wifi_ui_mode == X_WIFI_UI_MENU))) ui_refresh_page();
+                                        s_wifi_ui_mode == X_WIFI_UI_MENU ||
+                                        s_wifi_ui_mode == X_WIFI_UI_SCAN))) ui_refresh_page();
     if (s_ai_request_pending && (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY)) {
         switch (xigua_ai_voice_phase()) {
         case XIGUA_AI_VOICE_RECORDING:
@@ -1345,13 +1393,11 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             s_feed_ingredient = (s_feed_ingredient + 1) % (sizeof(FEED_INGREDIENTS) / sizeof(FEED_INGREDIENTS[0]));
             ui_sync();
         } else if (btn == BSP_BTN_UP && s_page == X_PAGE_WIFI &&
-                   (s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ||
-                    s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD)) {
+                   s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
             wifi_ui_backspace();
             ui_sync();
         } else if (btn == BSP_BTN_OK && s_page == X_PAGE_WIFI &&
-                   (s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ||
-                    s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD)) {
+                   s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
             wifi_ui_finish_edit();
             ui_sync();
         } else if (btn == BSP_BTN_DOWN && s_page == X_PAGE_WIFI) {
@@ -1526,23 +1572,25 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         }
     } else if (s_page == X_PAGE_WIFI) {
         if (s_wifi_ui_mode == X_WIFI_UI_MENU) {
-            const size_t item_count = 2;
+            const size_t item_count = 1;
             if (btn == BSP_BTN_UP) s_focus = (s_focus + item_count - 1) % item_count;
             else if (btn == BSP_BTN_DOWN) s_focus = (s_focus + 1) % item_count;
             else if (btn == BSP_BTN_OK) {
                 (void)xigua_wifi_start();
-                if (s_focus == 0) {
-                    wifi_ui_begin_edit(false);
-                } else {
-                    (void)xigua_wifi_resume_provisioning();
-                    s_wifi_ui_mode = X_WIFI_UI_STATUS;
-                    snprintf(s_feedback, sizeof(s_feedback), "请用配网小程序输入 Wi-Fi");
-                }
+                wifi_ui_start_scan();
+            }
+        } else if (s_wifi_ui_mode == X_WIFI_UI_SCAN) {
+            size_t count = xigua_wifi_scan_count();
+            if (btn == BSP_BTN_UP && count > 0) {
+                s_wifi_scan_index = (s_wifi_scan_index + count - 1) % count;
+            } else if (btn == BSP_BTN_DOWN && count > 0) {
+                s_wifi_scan_index = (s_wifi_scan_index + 1) % count;
+            } else if (btn == BSP_BTN_OK && !xigua_wifi_scan_in_progress()) {
+                wifi_ui_select_scan();
             }
         } else if (s_wifi_ui_mode == X_WIFI_UI_STATUS) {
             if (btn == BSP_BTN_OK) wifi_ui_enter_menu();
-        } else if (s_wifi_ui_mode == X_WIFI_UI_EDIT_SSID ||
-                   s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
+        } else if (s_wifi_ui_mode == X_WIFI_UI_EDIT_PASSWORD) {
             if (btn == BSP_BTN_UP) wifi_ui_move_key(-1);
             else if (btn == BSP_BTN_DOWN) wifi_ui_move_key(1);
             else if (btn == BSP_BTN_OK) wifi_ui_choose_key();

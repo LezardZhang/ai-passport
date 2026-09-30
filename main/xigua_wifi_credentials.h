@@ -1,0 +1,10 @@
+#pragma once
+
+/* User-authorized private-repository Wi-Fi presets for the Xigua device. */
+#define XIGUA_WIFI_BUILTIN_COUNT 3
+#define XIGUA_WIFI_BUILTIN_SSID_0 "100324"
+#define XIGUA_WIFI_BUILTIN_PASSWORD_0 "1393z5161x489x"
+#define XIGUA_WIFI_BUILTIN_SSID_1 "GUANTANG_2.4G"
+#define XIGUA_WIFI_BUILTIN_PASSWORD_1 "809C8BE4AB"
+#define XIGUA_WIFI_BUILTIN_SSID_2 "Lezard2.4G"
+#define XIGUA_WIFI_BUILTIN_PASSWORD_2 "9208057245647"

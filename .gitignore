@@ -12,7 +12,7 @@ managed_components/
 /.agents/skills/passport-device-test
 /.agents/skills/passport-debug
 
-# Local quota/API credentials; never commit these files.
+# Optional local credential overrides; shared application presets are tracked.
 *credentials*.json
 quota_config_local.h
 xigua_wifi_credentials_local.h
