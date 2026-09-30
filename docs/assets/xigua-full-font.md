@@ -53,7 +53,7 @@ The generated font object occupies 4,050,047 bytes of read-only data and no
 6,225,920-byte factory partition, leaving 462,992 bytes. NVS and the 2 MiB
 temporary voice partition retain their layout.
 
-The AI UI now pages replies in a clipped viewport, with a 1024-byte reply buffer
-and UTF-8-safe truncation. Longer replies are marked as partial. Check arbitrary
+The AI UI now pages replies in a clipped viewport, with a 4096-byte reply buffer
+and UTF-8-safe truncation. Server output limits also mark replies as partial. Check arbitrary
 model text, thin strokes at 2 bpp, clipping, and heap stability during voice/TLS
 use on the physical screen. See the [AI UI design](xigua-ui-design.md).

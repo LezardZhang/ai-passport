@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define XIGUA_AI_REPLY_BYTES 1024
+#define XIGUA_AI_REPLY_BYTES 4096
 
 typedef enum {
     XIGUA_AI_MODEL_CHAT = 0,

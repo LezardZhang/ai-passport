@@ -32,7 +32,7 @@ single-level and uses no hidden swipe or touch gesture. The password keyboard ex
 | Overview | AI assistant first, plus manual record, Today, Sleep, Sound, and Settings | Boot; long DOWN from a top-level page | OK opens focus; UP/DOWN changes focus |
 | Feeding | Record time, amount, and ingredient/notes | OK on Feeding focus | OK edits; long DOWN back |
 | Diaper | Record pee/poop and occurrence time | OK on Diaper focus | UP/DOWN choose; OK saves |
-| Sleep | Start, end, and calculate duration | OK on Sleep focus | OK starts/ends; long DOWN abandons after confirmation |
+| Sleep | Background sleep session and duration | Overview Start sleep / End sleep card | OK toggles the session without entering a timer page |
 | AI assistant | One entry for JSON records, text answers, and TTS stories | OK on the first Overview focus | UP/DOWN choose ask/story; hold OK to talk; long DOWN back |
 | Songs/noise | Choose a playlist, volume, and playback state; streaming later | OK on Sound focus | UP/DOWN choose; OK play/pause |
 | Today | Paginated counts and recent records | OK on Today focus | Long DOWN back; UP/DOWN pages |
@@ -59,7 +59,8 @@ between the first and last items. Selection moves on PRESS, so rapid repeated
 presses continue moving even when the driver subsequently reports DOUBLE.
 Menu cards share the AI preparation/action colors: dark blue background, cyan
 selection with dark text and a white outline. Cards exist only on the Overview
-page. The short undo window still takes priority over opening a menu item.
+page. The short undo window takes priority over opening ordinary menu items;
+the Sleep card always performs its displayed Start/End action.
 The AI assistant is the single top-level entry: the model can call local records through
 JSON, while text/TTS is reserved for content that needs a parent-facing response.
 Audio and network changes
@@ -92,9 +93,17 @@ ingredients start as fixed choices and free notes arrive through voice. Values
 outside 10–400 ml require manual review instead of silent clamping.
 
 The diaper page has only Pee and Poop. It writes a local event immediately; voice
-can add colour, consistency, or notes later. Sleep uses one active-session page and
-stores start, end, and duration. Bath and tummy time remain optional one-shot
-events rather than timers.
+can add colour, consistency, or notes later. Sleep is a background session:
+the Overview card changes between Start sleep and End sleep. Leaving Overview,
+feeding, voice requests, and the separate timer do not interrupt it. Ending
+stores one event with start/end and calculated duration. Within one boot the
+duration uses monotonic time; after reboot it uses trusted timestamps, otherwise
+reports duration uncalibrated. Bath and tummy time remain one-shot events.
+
+The existing persisted end timestamp uses `-1` to mark a running sleep; NVS
+structure size and magic stay unchanged. Older active-sleep state migrates on
+load. Earlier firmware can read the record layout but does not recognize this
+background-session marker when rolling back.
 
 Saving enters a short `Saving` state. Success shows `Recorded 150 ml` and a
 five-second undo. Failure shows retry and back; the authoritative counters are
@@ -114,8 +123,15 @@ UP/DOWN press changes one page of five 38 px lines; focus, clicks, and double-cl
 cannot send another request. OK opens reply actions with Continue selected by
 default; Ask again returns to preparation and still requires a deliberate hold.
 Failure shows the error separately and keeps the previous reply accessible.
-The reply buffer is 1024 bytes; truncation respects UTF-8 boundaries and is marked
-as a partial reply. The background service health check does not replace a reply.
+The reply buffer is 4096 bytes, stored outside task stacks. The model budget is
+1024 output tokens; the chat I/O timeout is 45 seconds. Both local UTF-8-safe
+clipping and the server's `finish_reason: length` mark a partial reply. The
+background service health check does not replace a reply. The preset prompt
+requests complete plain paragraphs, preferably within 500 Chinese characters,
+without Markdown, blank lines, emoji or decorative symbols, even when a user
+requests those formats. Since the model can still violate it, the worker also
+collapses blank lines and removes common Markdown markers and emoji before
+display. This cleanup runs after command validation, never on unparsed JSON.
 
 Example structured command:
 
@@ -123,13 +139,30 @@ Example structured command:
 {"actions":[{"action":"record_feeding","time":"15:20","amount_ml":150,"ingredient":"FORMULA"}]}
 ```
 
-The firmware validates and stores whitelisted actions (`record_feeding`,
-`record_diaper`, `record_sleep`, `record_bath`, and `record_tummy`) in the local
-event queue. A response that needs to be shown or spoken uses
-`{"reply_text":"Recorded formula 150 ml at 15:20"}` or
-`{"tts_text":"Once upon a time..."}`. Plain reply text never becomes a device
-command. Songs and white noise use a bounded local/streaming audio queue; HTTP
-chunks are never passed directly to I2S.
+The prompt distinguishes completed facts from questions, negation, plans and
+hypotheticals. A feeding fact with an amount becomes a record; feeding advice is
+plain text. Missing required information produces a plain-text follow-up.
+
+| Voice action | Required fields / effect |
+| --- | --- |
+| `record_feeding` | Integer `amount_ml` 10–400; optional explicit `ingredient` (`FORMULA` / `BREAST_MILK`) |
+| `record_diaper` | `kind`: `pee` / `poop` |
+| `record_sleep` | Integer `duration_min` 0–65535 for an already completed sleep |
+| `record_bath` | One bath event |
+| `record_tummy` | One tummy-time event |
+| `start_sleep` | Start background sleep, reject an already running session |
+| `end_sleep` | End the running sleep and calculate duration; reject when none is running |
+
+Optional `time` is today's `HH:MM` when explicitly supplied; omission uses device
+time. The worker accepts only a complete JSON object with exactly one whitelisted
+action. Malformed, clipped, multiple, unknown or invalid actions never commit.
+It saves NVS before replacing JSON with a device-generated success message and
+offering undo. Persistence failure restores the prior state and reports an error.
+Plain text never changes records. Settings, Wi-Fi, timers and audio playback are
+not exposed as voice commands. The older `reply_text` / `tts_text` response API
+remains for compatibility; the current model prompt returns plain text for
+questions and stories. TTS playback is not implemented. Songs and white noise
+use a bounded audio queue; HTTP chunks never go directly to I2S.
 
 Today uses pages rather than a hidden scroll list. Empty state still offers a
 return path and Quick record. Sound playback belongs to an audio worker and is

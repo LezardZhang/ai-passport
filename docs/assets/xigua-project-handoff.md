@@ -166,9 +166,75 @@ returned HTTP 200 / `ESP_OK`. Initial TLS heap: 124,144 bytes free, largest
 106,496 bytes. No panic appeared during the bounded startup observation.
 Physical recording and card rendering acceptance are pending.
 
+## Post-recording model failure investigation (2026-09-30)
+
+The owner reported model connection failure after releasing the recording key.
+The running ELF prefix `47cbb2ae5` matches the verified `aa875be0...` archive
+above. A bounded reboot observation again obtained Wi-Fi IP and HTTP 200 from
+the public probe and MiMo text self-check. No new voice request was triggered
+during the serial windows, so the board's failing stage/status remains unknown.
+
+The retained voice partition contains a finalized 172,076-byte WAV: 5.376 seconds,
+16 kHz mono, 16-bit PCM. Stub bulk reads encountered corrupt serial packets;
+a ROM read successfully obtained the exact WAV without writing Flash. A host
+replay using the firmware's ASR JSON framing and current configured credentials
+returned ASR HTTP 200 in 0.89 seconds, followed by chat HTTP 200 in 6.12 seconds.
+This validates the retained audio and current service access from the host; it
+does not validate the board's upload, response reads, TLS memory, or the earlier
+failure. No firmware change or flash was made for this investigation. Capture
+the actual failed voice request before selecting a repair; keep private audio,
+transcripts and credentials out of tracked notes and routine output.
+
+## Voice records, plain replies and background sleep (2026-09-30)
+
+The owner confirmed a recent real recording returned normally, then requested
+longer plain replies, actual voice-driven local records, and sleep independent
+of its page. The preset now describes seven local commands: feeding, diaper,
+completed sleep, bath, tummy time, start sleep and end sleep. Completed facts
+produce one-action JSON; questions and missing information produce prose.
+The worker strictly validates JSON and saves NVS before showing a local success
+message. Failed persistence restores the previous state. Invalid, truncated or
+multiple commands never become records. Manual and voice sleep share this path.
+
+Overview now has Start sleep / End sleep as one top-level toggle. Sleep continues
+while using other pages, recording feeding, or running the independent timer.
+Within one boot duration uses monotonic time; across reboot it uses trusted
+timestamps or reports uncalibrated duration. The existing NVS end timestamp's
+`-1` sentinel preserves structure size; old active sleep migrates. Older firmware
+does not recognize an ongoing background sleep when rolled back.
+
+Replies now have 4096 bytes and a 1024-token budget. Local UTF-8 clipping and
+server `finish_reason: length` both mark partial replies. Chat I/O timeout is
+45 seconds. Presets request compact complete prose without Markdown/emoji/blank
+lines. A real service test of five semantic cases passed HTTP 200: milk record,
+missing amount, feeding question, sleep start and sleep end. A repeated story
+test still returned a blank line; display cleanup now collapses blank lines and
+removes common Markdown markers and emoji after command validation. No model
+format guarantee is assumed. Synthetic prompt tests ran on the host, not the board.
+
+Focused host checks PASS: transaction validation/NVS rollback, background sleep
+and reboot timing, long replies/UTF-8/format cleanup, AI interaction, menu,
+keyboard, voice NOR/WAV and full-font coverage. The transaction test compiles
+real application functions with JSON-tree/NVS/clock doubles; it does not test
+the upstream JSON parser. Repository checks PASS. The complete gate was attempted
+and remains blocked by the actionlint installer's unsupported Windows Git Bash
+platform. ESP-IDF 5.5.3 build and merged/archive verification PASS using the
+verified ASCII source mirror. Stack frames: capture 80, voice request 560, AI
+worker 432, result consumer 32 and local record transaction 688 bytes; 4 KiB
+reply buffers stay off the task stacks.
+
+App: 5,773,120 bytes; factory free: 452,800 bytes. Partition table unchanged.
+Archive: `build/firmware/08484d011a536b53adaa910208dca443433a7f41643520ffc0ddd267a1cf60a8/`.
+Full-image SHA-256:
+`08484d011a536b53adaa910208dca443433a7f41643520ffc0ddd267a1cf60a8`.
+Matching ELF SHA-256:
+`a079e089781f9ccfed309688bd72248a3704990086bb5f438ddb86bbfc50ed5f`.
+The source/configuration checkpoint is created before the authorized segmented
+COM6 write, preserving NVS and voice data. Flash/startup evidence is appended below.
+
 ## Remaining work
 
-The font coverage is improved, but the text is still too small for comfortable use on the 240x320 display. The menu hierarchy, focus indication, back navigation, and bottom hint line need a deliberate redesign rather than more labels. The AI page now has paging and UTF-8-safe truncation; replies beyond 1024 bytes and the visual quality of the reader still need review.
+The menu and AI reader have been redesigned, but font size and reading comfort on the 240x320 display still need physical review. The reply buffer is 4096 bytes with paging; replies beyond the local or server limit remain partial. Physically verify voice records against Today, plain reply rendering, and sleep start → other page → sleep end, including a reboot during sleep.
 
 The voice path needs a real short-phrase test, then 20–30 second and 60 second recordings, with capture duration, free heap, ASR status, transcript length, and model reply recorded. TTS playback and audio format conversion are not implemented. The automatic self-check intentionally avoids ASR and TTS usage; a user-controlled deep check should be added later.
 

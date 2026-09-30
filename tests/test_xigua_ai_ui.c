@@ -47,5 +47,21 @@ int main(void)
     }
     assert(!xigua_text_copy(text, sizeof(text), utf8));
     assert(xigua_text_copy(text, 3, utf8) && strcmp(text, "A") == 0);
+    assert(xigua_text_reply_copy(text, sizeof(text), "OK", "length"));
+    assert(!xigua_text_reply_copy(text, sizeof(text), "OK", "stop"));
+    assert(!xigua_text_reply_copy(text, sizeof(text), "OK", NULL));
+    assert(xigua_text_reply_copy(text, 3, utf8, "stop"));
+    /* A multi-page Chinese reply must survive beyond the old 1024-byte limit. */
+    char long_reply[2404], displayed[4096];
+    for (size_t i = 0; i < 800; ++i) memcpy(long_reply + i * 3, "\xe4\xb8\xad", 3);
+    memcpy(long_reply + 2400, "\xe3\x80\x82", 4);
+    assert(!xigua_text_reply_copy(displayed, sizeof(displayed), long_reply, "stop"));
+    assert(strlen(displayed) == 2403 && strcmp(displayed + 2400, "\xe3\x80\x82") == 0);
+    char formatted[] = "\n# Title\r\n\n**文字** 😀\n\n1. 第一段\n- 第二段 ✨\n\n";
+    xigua_text_plain_reply(formatted);
+    assert(strcmp(formatted, "Title\n文字\n第一段\n第二段") == 0);
+    char plain[] = "2026 年睡眠记录。\n\n\n网络 GUANTANG_2.4G。";
+    xigua_text_plain_reply(plain);
+    assert(strcmp(plain, "2026 年睡眠记录。\n网络 GUANTANG_2.4G。") == 0);
     puts("AI reply protection, explicit recording, paging and UTF-8 bounds: PASS");
 }

@@ -41,6 +41,9 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_xigua_menu.c -o "${test_dir}/test_xigua_menu"
     "${test_dir}/test_xigua_menu"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_xigua_sleep.c -o "${test_dir}/test_xigua_sleep"
+    "${test_dir}/test_xigua_sleep"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Itests/xigua_stubs -Imain \
         tests/test_xigua_wifi.c -o "${test_dir}/test_xigua_wifi"
     "${test_dir}/test_xigua_wifi"
@@ -75,6 +78,7 @@ run_static_checks() {
     done
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_deep_sleep_contract.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_voice_capture.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_voice_records.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_full_font.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_repo.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py

@@ -8,6 +8,7 @@
 #include "xigua_ai_ui.h"
 #include "xigua_text.h"
 #include "xigua_menu.h"
+#include "xigua_sleep.h"
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -152,6 +153,10 @@ typedef struct {
     int battery_soc;
     int64_t active_started_us;
     bool active_time_known;
+    int64_t sleep_started_us;
+    bool sleep_time_known;
+    uint16_t last_sleep_duration;
+    bool last_sleep_duration_known;
 } x_state_t;
 
 #define X_UNDO_WINDOW_US 5000000LL
@@ -164,6 +169,8 @@ typedef struct {
     int64_t expires_us;
     bool active_time_known;
     bool valid;
+    int64_t sleep_started_us;
+    bool sleep_time_known;
 } x_undo_t;
 
 static const uint32_t X_STATE_MAGIC = 0x58494741U;
@@ -181,6 +188,8 @@ static lv_obj_t *s_ai_cards[3];
 static lv_obj_t *s_home_panel;
 static lv_obj_t *s_home_summary;
 static lv_obj_t *s_home_cards[3];
+/* Worker writes under s_mutex; the LVGL task adopts this undo after delivery. */
+static x_undo_t s_voice_undo;
 static x_ai_view_t s_ai_rendered_view = (x_ai_view_t)-1;
 static lv_timer_t *s_timer;
 
@@ -275,19 +284,23 @@ static void apply_timezone(void)
     tzset();
 }
 
-static esp_err_t state_save_command_id(const char *command_id)
+static esp_err_t state_save_locked(const char *command_id)
 {
-    if (!s_nvs_open || !s_mutex) return ESP_ERR_INVALID_STATE;
-    x_persisted_t data;
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return ESP_ERR_TIMEOUT;
-    data = s_state.data;
-    xSemaphoreGive(s_mutex);
-    esp_err_t err = nvs_set_blob(s_nvs, "state", &data, sizeof(data));
+    esp_err_t err = nvs_set_blob(s_nvs, "state", &s_state.data, sizeof(s_state.data));
     if (err == ESP_OK && command_id && command_id[0] != '\0') {
         err = nvs_set_str(s_nvs, "last_cmd_id", command_id);
     }
     if (err == ESP_OK) err = nvs_commit(s_nvs);
     if (err != ESP_OK) ESP_LOGW(TAG, "state save failed: %s", esp_err_to_name(err));
+    return err;
+}
+
+static esp_err_t state_save_command_id(const char *command_id)
+{
+    if (!s_nvs_open || !s_mutex) return ESP_ERR_INVALID_STATE;
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return ESP_ERR_TIMEOUT;
+    esp_err_t err = state_save_locked(command_id);
+    xSemaphoreGive(s_mutex);
     return err;
 }
 
@@ -322,6 +335,8 @@ static void undo_capture_locked(void)
     s_undo.data = s_state.data;
     s_undo.active_started_us = s_state.active_started_us;
     s_undo.active_time_known = s_state.active_time_known;
+    s_undo.sleep_started_us = s_state.sleep_started_us;
+    s_undo.sleep_time_known = s_state.sleep_time_known;
     s_undo.expires_us = esp_timer_get_time() + X_UNDO_WINDOW_US;
     s_undo.valid = true;
 }
@@ -343,6 +358,8 @@ static bool undo_last(void)
     s_state.data = s_undo.data;
     s_state.active_started_us = s_undo.active_started_us;
     s_state.active_time_known = s_undo.active_time_known;
+    s_state.sleep_started_us = s_undo.sleep_started_us;
+    s_state.sleep_time_known = s_undo.sleep_time_known;
     xSemaphoreGive(s_mutex);
     state_save();
     undo_clear();
@@ -427,7 +444,7 @@ static void event_totals(const x_persisted_t *data, uint16_t *feed_count,
 static int64_t json_event_time(cJSON *object, const char *key)
 {
     cJSON *value = cJSON_GetObjectItemCaseSensitive(object, key);
-    if (cJSON_IsNumber(value) && value->valuedouble >= 0 && value->valuedouble <= INT64_MAX) {
+    if (cJSON_IsNumber(value) && value->valuedouble >= 0 && value->valuedouble < 0x1p63) {
         return (int64_t)value->valuedouble;
     }
     if (cJSON_IsString(value) && value->valuestring) {
@@ -455,6 +472,7 @@ static uint8_t ingredient_from_json(cJSON *value)
         if (strcasecmp(value->valuestring, FEED_INGREDIENTS[i]) == 0) return i;
     }
     if (strcasecmp(value->valuestring, "milk_powder") == 0 ||
+        strcasecmp(value->valuestring, "FORMULA") == 0 ||
         strcasecmp(value->valuestring, "formula_milk") == 0 ||
         strcmp(value->valuestring, "奶粉") == 0) return 0;
     if (strcasecmp(value->valuestring, "breast_milk") == 0 ||
@@ -467,8 +485,33 @@ static uint8_t ingredient_from_json(cJSON *value)
 static bool json_number_in_range(cJSON *object, const char *key, int min, int max, int *out)
 {
     cJSON *value = cJSON_GetObjectItemCaseSensitive(object, key);
-    if (!cJSON_IsNumber(value) || value->valuedouble < min || value->valuedouble > max) return false;
+    if (!cJSON_IsNumber(value) || value->valuedouble < min || value->valuedouble > max ||
+        value->valuedouble != value->valueint) return false;
     *out = value->valueint;
+    return true;
+}
+
+static bool apply_sleep_action_locked(bool begin)
+{
+    bool running = xigua_sleep_running(s_state.data.sleep_end_epoch);
+    if (begin == running) return false;
+    if (begin) {
+        s_state.data.sleep_start_epoch = (int64_t)time(NULL);
+        s_state.data.sleep_end_epoch = XIGUA_SLEEP_RUNNING_END;
+        s_state.sleep_started_us = esp_timer_get_time();
+        s_state.sleep_time_known = true;
+    } else {
+        int64_t now = (int64_t)time(NULL);
+        if (now < 0) now = 0;
+        s_state.last_sleep_duration_known = xigua_sleep_duration(s_state.sleep_time_known,
+            s_state.sleep_started_us, esp_timer_get_time(), s_state.data.sleep_start_epoch,
+            now, &s_state.last_sleep_duration);
+        s_state.data.sleep_end_epoch = now;
+        s_state.data.sleep_count++;
+        s_state.data.sleep_minutes += s_state.last_sleep_duration;
+        append_event_locked(X_EVENT_SLEEP, 0, s_state.last_sleep_duration, 0, now);
+        s_state.sleep_time_known = false;
+    }
     return true;
 }
 
@@ -477,6 +520,8 @@ static bool apply_ai_action_locked(cJSON *action)
     cJSON *name = cJSON_GetObjectItemCaseSensitive(action, "action");
     if (!cJSON_IsString(name) || !name->valuestring) return false;
     const char *action_name = name->valuestring;
+    if (strcmp(action_name, "start_sleep") == 0) return apply_sleep_action_locked(true);
+    if (strcmp(action_name, "end_sleep") == 0) return apply_sleep_action_locked(false);
     int amount = 0;
     int64_t event_time = cJSON_GetObjectItemCaseSensitive(action, "timestamp") ?
         json_event_time(action, "timestamp") : json_event_time(action, "time");
@@ -513,8 +558,10 @@ static bool apply_ai_action_locked(cJSON *action)
         cJSON *end = cJSON_GetObjectItemCaseSensitive(action, "end_timestamp");
         s_state.data.sleep_count++;
         s_state.data.sleep_minutes += (uint16_t)duration;
-        s_state.data.sleep_start_epoch = cJSON_IsNumber(start) ? (int64_t)start->valuedouble : event_time;
-        s_state.data.sleep_end_epoch = cJSON_IsNumber(end) ? (int64_t)end->valuedouble : event_time;
+        if (!xigua_sleep_running(s_state.data.sleep_end_epoch)) {
+            s_state.data.sleep_start_epoch = cJSON_IsNumber(start) ? json_event_time(action, "start_timestamp") : event_time;
+            s_state.data.sleep_end_epoch = cJSON_IsNumber(end) ? json_event_time(action, "end_timestamp") : event_time;
+        }
         append_event_locked(X_EVENT_SLEEP, 0, (uint16_t)duration, 0, event_time);
         return true;
     }
@@ -525,6 +572,71 @@ static bool apply_ai_action_locked(cJSON *action)
         return true;
     }
     return false;
+}
+
+esp_err_t xigua_app_process_ai_reply(char *text, size_t capacity, bool truncated)
+{
+    if (!text || !capacity) return ESP_ERR_INVALID_ARG;
+    const char *start = text;
+    while (*start == ' ' || *start == '\n' || *start == '\r' || *start == '\t') ++start;
+    if (*start != '{') return ESP_OK; /* Prose never changes local records. */
+    if (truncated) return ESP_ERR_INVALID_SIZE;
+    cJSON *root = cJSON_ParseWithOpts(start, NULL, true);
+    cJSON *actions = root ? cJSON_GetObjectItemCaseSensitive(root, "actions") : NULL;
+    cJSON *action = cJSON_IsArray(actions) && cJSON_GetArraySize(actions) == 1 ?
+                    cJSON_GetArrayItem(actions, 0) : NULL;
+    if (!cJSON_IsObject(root) || !cJSON_IsObject(action)) {
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    if (!s_nvs_open || !s_mutex) { cJSON_Delete(root); return ESP_ERR_INVALID_STATE; }
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        cJSON_Delete(root); return ESP_ERR_TIMEOUT;
+    }
+    x_state_t before = s_state;
+    esp_err_t err = apply_ai_action_locked(action) ? state_save_locked(NULL) : ESP_ERR_INVALID_ARG;
+    if (err == ESP_OK) {
+        s_voice_undo = (x_undo_t){ .data = before.data, .active_started_us = before.active_started_us,
+            .active_time_known = before.active_time_known, .sleep_started_us = before.sleep_started_us,
+            .sleep_time_known = before.sleep_time_known, .valid = true };
+        cJSON *name = cJSON_GetObjectItemCaseSensitive(action, "action");
+        if (strcmp(name->valuestring, "record_feeding") == 0) {
+            snprintf(text, capacity, "已记录喝奶 %u 毫升。", s_state.data.milk_ml);
+        } else if (strcmp(name->valuestring, "record_diaper") == 0) {
+            snprintf(text, capacity, "尿便记录已保存。");
+        } else if (strcmp(name->valuestring, "record_sleep") == 0) {
+            cJSON *duration = cJSON_GetObjectItemCaseSensitive(action, "duration_min");
+            snprintf(text, capacity, "已记录睡眠 %d 分钟。", duration->valueint);
+        } else if (strcmp(name->valuestring, "start_sleep") == 0) {
+            snprintf(text, capacity, "睡眠已开始，可继续使用其他功能。");
+        } else if (strcmp(name->valuestring, "end_sleep") == 0) {
+            if (s_state.last_sleep_duration_known) snprintf(text, capacity,
+                "睡眠已结束，已记录 %u 分钟。", s_state.last_sleep_duration);
+            else snprintf(text, capacity, "睡眠已结束，时长待校准。");
+        } else snprintf(text, capacity, "%s记录已保存。",
+            strcmp(name->valuestring, "record_bath") == 0 ? "洗澡" : "趴玩");
+        ESP_LOGI(TAG, "voice record saved action=%s", name->valuestring);
+    } else {
+        s_state = before;
+        /* A failed commit must not leave a staged successful record behind. */
+        if (err != ESP_ERR_INVALID_ARG) (void)state_save_locked(NULL);
+    }
+    xSemaphoreGive(s_mutex);
+    cJSON_Delete(root);
+    return err;
+}
+
+static bool ui_take_voice_undo(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    bool saved = s_voice_undo.valid;
+    if (saved) {
+        s_undo = s_voice_undo;
+        s_undo.expires_us = esp_timer_get_time() + X_UNDO_WINDOW_US;
+        s_voice_undo.valid = false;
+    }
+    xSemaphoreGive(s_mutex);
+    return saved;
 }
 
 static void state_load(void)
@@ -581,6 +693,12 @@ static void state_load(void)
                 s_state.data.event_head = 0;
             }
             if (!new_valid && legacy_valid) state_save();
+            /* Earlier builds put ongoing sleep into the timer's active slot. */
+            if (s_state.data.active == X_ACTIVE_SLEEP) {
+                s_state.data.sleep_end_epoch = XIGUA_SLEEP_RUNNING_END;
+                s_state.data.active = X_ACTIVE_NONE;
+                state_save();
+            }
         }
     }
     apply_timezone();
@@ -933,7 +1051,7 @@ static void ui_menu_focus(lv_obj_t *card, bool selected)
     lv_obj_set_style_outline_color(card, lv_color_hex(0xFFFFFF), 0);
 }
 
-static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper)
+static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper, bool sleeping)
 {
     if (!s_home_panel) {
         s_home_panel = lv_obj_create(s_screen);
@@ -945,8 +1063,8 @@ static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper)
         for (size_t i = 0; i < 3; ++i) s_home_cards[i] = ui_menu_card(s_home_panel, 54 + (int)i * 44);
     }
     lv_obj_add_flag(s_body, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text_fmt(s_home_summary, "奶量 %u 毫升\n睡眠 %u 次  尿便 %u 次",
-                          milk_ml, sleep, diaper);
+    if (sleeping) lv_label_set_text_fmt(s_home_summary, "奶量 %u 毫升\n睡眠进行中  尿便 %u 次", milk_ml, diaper);
+    else lv_label_set_text_fmt(s_home_summary, "奶量 %u 毫升\n睡眠 %u 次  尿便 %u 次", milk_ml, sleep, diaper);
     size_t first = xigua_menu_first(s_focus, 3);
     for (size_t i = 0; i < 3; ++i) {
         if (first + i >= sizeof(HOME_ITEMS) / sizeof(HOME_ITEMS[0])) {
@@ -954,11 +1072,15 @@ static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper)
             continue;
         }
         lv_obj_remove_flag(s_home_cards[i], LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(s_home_cards[i], HOME_ITEMS[first + i]);
+        lv_label_set_text(s_home_cards[i], first + i == 3 ?
+                          (sleeping ? "结束睡眠" : "开始睡眠") : HOME_ITEMS[first + i]);
         ui_menu_focus(s_home_cards[i], first + i == s_focus);
     }
     if (!s_feedback[0]) lv_label_set_text_fmt(s_status, "菜单 %u / 3", (unsigned)(first / 3 + 1));
-    ui_set_hint("上/下选择  确认打开\n长按上键快速喂奶");
+    ui_set_hint(s_focus != 3 && undo_available() ? "确认撤销最近记录\n上/下选择" :
+                s_focus == 3 ? (sleeping ? "确认结束睡眠\n上/下选择其他功能" :
+                                          "确认开始睡眠\n上/下选择其他功能") :
+                "上/下选择  确认打开\n长按上键快速喂奶");
 }
 
 static void ui_ai_render(void)
@@ -1221,7 +1343,7 @@ static void ui_refresh_page(void)
     if (snapshot.battery_soc >= 0) lv_label_set_text_fmt(s_battery, "%d%%", snapshot.battery_soc);
     if (s_status) lv_label_set_text(s_status, s_feedback);
     if (s_page == X_PAGE_OVERVIEW) ui_home_render(snapshot.data.milk_ml, sleep_count,
-                                               (unsigned)(pee_count + poop_count));
+        (unsigned)(pee_count + poop_count), xigua_sleep_running(snapshot.data.sleep_end_epoch));
     else if (s_home_panel) {
         lv_obj_delete(s_home_panel);
         s_home_panel = s_home_summary = NULL;
@@ -1265,18 +1387,20 @@ static void ui_timer_cb(lv_timer_t *timer)
         }
         ui_refresh_page();
     }
-    static char ai_text[XIGUA_AI_REPLY_BYTES];
     esp_err_t ai_error = ESP_FAIL;
     bool truncated = false;
-    if (xigua_ai_take_text(ai_text, sizeof(ai_text), &ai_error, &truncated)) {
+    if (xigua_ai_take_text(s_ai_reply, sizeof(s_ai_reply), &ai_error, &truncated)) {
         s_ai_request_pending = false;
         if (ai_error == ESP_OK) {
-            s_ai_truncated = xigua_text_copy(s_ai_reply, sizeof(s_ai_reply), ai_text) || truncated;
+            s_ai_truncated = truncated;
             s_ai_rendered_view = (x_ai_view_t)-1;
         } else snprintf(s_ai_error, sizeof(s_ai_error), "%s", esp_err_to_name(ai_error));
         x_ai_complete(&s_ai_ui, ai_error == ESP_OK);
         snprintf(s_feedback, sizeof(s_feedback), ai_error == ESP_OK ? "Mimo 回复已收到" : "Mimo 请求失败");
-        if (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY) ui_refresh_page();
+        if (ai_error == ESP_OK && ui_take_voice_undo()) {
+            snprintf(s_feedback, sizeof(s_feedback), "AI记录已保存");
+        }
+        ui_refresh_page();
     }
 }
 
@@ -1331,13 +1455,27 @@ static void save_diaper(bool poop)
     snprintf(s_feedback, sizeof(s_feedback), "%s已记录，5秒内按确认键撤销", poop ? "便" : "尿");
 }
 
+static void toggle_sleep(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    bool sleeping = xigua_sleep_running(s_state.data.sleep_end_epoch);
+    xSemaphoreGive(s_mutex);
+    char reply[192];
+    snprintf(reply, sizeof(reply), "{\"actions\":[{\"action\":\"%s\"}]}",
+              sleeping ? "end_sleep" : "start_sleep");
+    esp_err_t err = xigua_app_process_ai_reply(reply, sizeof(reply), false);
+    if (err == ESP_OK) {
+        (void)ui_take_voice_undo();
+        (void)xigua_text_copy(s_feedback, sizeof(s_feedback), reply);
+    } else snprintf(s_feedback, sizeof(s_feedback), "睡眠操作失败：%s", esp_err_to_name(err));
+}
+
 static void start_active(x_active_t active)
 {
     if (!s_mutex) return;
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
     undo_clear();
     s_state.data.active = active;
-    if (active == X_ACTIVE_SLEEP) s_state.data.sleep_start_epoch = (int64_t)time(NULL);
     s_state.active_started_us = esp_timer_get_time();
     s_state.active_time_known = true;
     xSemaphoreGive(s_mutex);
@@ -1640,7 +1778,7 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     }
     if (ev != BSP_BTN_CLICK) return;
 
-    if (btn == BSP_BTN_OK && s_page == X_PAGE_OVERVIEW && undo_available()) {
+    if (btn == BSP_BTN_OK && s_page == X_PAGE_OVERVIEW && s_focus != 3 && undo_available()) {
         if (undo_last()) ui_sync();
         return;
     }
@@ -1706,8 +1844,7 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             else if (s_focus == 1) go_page(X_PAGE_RECORD, 0);
             else if (s_focus == 2) go_page(X_PAGE_TODAY, 0);
             else if (s_focus == 3) {
-                if (s_state.data.active != X_ACTIVE_NONE) go_page(X_PAGE_ACTIVE, 0);
-                else start_active(X_ACTIVE_SLEEP), go_page(X_PAGE_ACTIVE, 0);
+                toggle_sleep();
             }
             else if (s_focus == 4) go_page(X_PAGE_SOUND, 0);
             else if (s_focus == 5) {
@@ -1724,7 +1861,7 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         else if (btn == BSP_BTN_OK) {
             if (s_focus == 0) s_feed_ml = s_state.data.milk_ml,
                 s_feed_ingredient = s_state.data.milk_ingredient, go_page(X_PAGE_FEED, 0);
-            else if (s_focus == 1) start_active(X_ACTIVE_SLEEP), go_page(X_PAGE_ACTIVE, 0);
+            else if (s_focus == 1) { toggle_sleep(); go_page(X_PAGE_OVERVIEW, 3); }
             else if (s_focus == 2) go_page(X_PAGE_DIAPER, 0);
             else if (s_focus == 3) save_simple_record(X_ACTIVE_BATH), go_page(X_PAGE_OVERVIEW, 0);
             else if (s_focus == 4) save_simple_record(X_ACTIVE_TUMMY), go_page(X_PAGE_OVERVIEW, 0);

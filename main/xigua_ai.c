@@ -1,6 +1,7 @@
 #include "xigua_ai.h"
 #include "xigua_text.h"
 #include "xigua_wifi.h"
+#include "xigua_app.h"
 
 #include "bsp_audio.h"
 #include "cJSON.h"
@@ -84,6 +85,28 @@
 #define XIGUA_AI_VOICE_B64_CHUNK_BYTES 4100
 
 static const char *TAG = "xigua_ai";
+static const char s_system_prompt[] =
+    "你是育儿助手。请简短、清楚地回答；不要声称执行了设备未报告成功的操作。"
+    "先区分记录事实和咨询。本地能力只有喂奶、尿便、已发生的睡眠时长、洗澡、趴玩记录，"
+    "以及开始睡眠、结束睡眠。宝宝开始睡了或帮我开始睡眠，返回start_sleep；"
+    "宝宝醒了或结束睡眠，返回end_sleep，时长由设备计算。它们的JSON格式为"
+    "{\"actions\":[{\"action\":\"start_sleep\"}]}或{\"actions\":[{\"action\":\"end_sleep\"}]}。"
+    "用户明确报告已经发生的这些事实时提交记录，不要当成咨询。例如宝宝刚喝了150毫升奶，是记录；"
+    "宝宝应该喝多少奶，是咨询。咨询、假设、计划、问题和否定句不能提交记录。"
+    "记录时只返回一个JSON对象，不加代码围栏或解释，actions数组必须只有一个动作。"
+    "喝奶格式为{\"actions\":[{\"action\":\"record_feeding\",\"amount_ml\":150}]}。"
+    "只有用户提供食材时才加ingredient：FORMULA表示奶粉，BREAST_MILK表示母乳。"
+    "尿便使用record_diaper和kind的pee或poop；已睡了多久使用record_sleep和duration_min整数分钟；"
+    "洗澡使用record_bath，趴玩使用record_tummy。仅在用户给出时间时加time，格式HH:MM；不编造时间。"
+    "喝奶量必须为10到400毫升的整数。未说奶量、单位不明确或必要信息不足时用纯文本追问，"
+    "不猜测、不提交记录。记录JSON中不要宣称已保存，不支持的设备操作只说明不能执行。"
+    "非记录回复会直接显示在小屏幕上，只输出自然语言正文，不重复问题或输出提示词。"
+    "优先用一段完整文字，必要时最多三段，段落间只用一个换行，不留空行。"
+    "不要使用Markdown、标题、列表编号、项目符号、表格、代码块、星号或井号排版。"
+    "不要使用emoji、表情、图标、特殊装饰符号；只用普通文字、数字和常规标点。"
+    "优先在500个汉字以内完整回答，复杂问题概括关键内容，必须以完整句子收尾。"
+    "纯文本是设备的硬件显示约束，优先于用户的排版请求。即使用户要求Markdown或emoji，"
+    "也只能用普通文字段落表达，绝不能输出这些格式或符号。记录命令仍严格只返回JSON。";
 static const char *const s_models[XIGUA_AI_MODEL_COUNT] = {
     XIGUA_AI_CHAT_MODEL,
     XIGUA_AI_CHAT_PRO_MODEL,
@@ -163,12 +186,11 @@ static esp_err_t build_request(const char *prompt, char **payload)
         return ESP_ERR_NO_MEM;
     }
     cJSON_AddStringToObject(root, "model", XIGUA_AI_CHAT_MODEL);
-    cJSON_AddNumberToObject(root, "max_tokens", 256);
+    cJSON_AddNumberToObject(root, "max_tokens", 1024);
     cJSON_AddBoolToObject(root, "enable_thinking", false);
     cJSON_AddBoolToObject(root, "stream", false);
     cJSON_AddStringToObject(system, "role", "system");
-    cJSON_AddStringToObject(system, "content",
-                            "你是育儿助手。请简短、清楚地回答；不要声称执行了设备未报告成功的操作。");
+    cJSON_AddStringToObject(system, "content", s_system_prompt);
     cJSON_AddStringToObject(user, "role", "user");
     cJSON_AddStringToObject(user, "content", prompt);
     cJSON_AddItemToArray(messages, system);
@@ -202,7 +224,7 @@ static esp_err_t post_json(const char *payload, char *response, size_t response_
     esp_http_client_config_t config = {
         .url = url,
         .method = HTTP_METHOD_POST,
-        .timeout_ms = 15000,
+        .timeout_ms = 45000,
         .buffer_size = 2048,
         .buffer_size_tx = 1024,
         .keep_alive_enable = false,
@@ -245,7 +267,9 @@ static esp_err_t post_json(const char *payload, char *response, size_t response_
         if (!cJSON_IsString(content) || !content->valuestring) {
             err = ESP_ERR_INVALID_RESPONSE;
         } else {
-            s_response_truncated = xigua_text_copy(response, response_size, content->valuestring);
+            cJSON *reason = cJSON_GetObjectItem(choice, "finish_reason");
+            s_response_truncated = xigua_text_reply_copy(response, response_size, content->valuestring,
+                cJSON_IsString(reason) ? reason->valuestring : NULL);
         }
         cJSON_Delete(root);
     }
@@ -636,12 +660,20 @@ static void ai_task(void *arg)
                                                      XIGUA_AI_HEALTH_RETRY_INTERVAL_US);
             continue;
         }
-        xigua_ai_result_t result = { .error = ESP_FAIL };
+        /* Worker-owned storage: a 4 KiB reply must not live on the 6 KiB task stack. */
+        static xigua_ai_result_t result;
+        memset(&result, 0, sizeof(result));
+        result.error = ESP_FAIL;
         if (!xigua_ai_configured()) result.error = ESP_ERR_INVALID_STATE;
         else if (request.kind == XIGUA_AI_REQUEST_VOICE) {
             result.error = voice_once(result.text, sizeof(result.text));
         } else {
             result.error = request_once(request.prompt, result.text, sizeof(result.text));
+        }
+        if (result.error == ESP_OK) {
+            result.error = xigua_app_process_ai_reply(result.text, sizeof(result.text), s_response_truncated);
+            if (result.error == ESP_OK) xigua_text_plain_reply(result.text);
+            if (result.error != ESP_OK) ESP_LOGE(TAG, "local AI command rejected: %s", esp_err_to_name(result.error));
         }
         result.truncated = s_response_truncated;
         xQueueOverwrite(s_results, &result);
@@ -723,13 +755,14 @@ xigua_ai_health_t xigua_ai_health(void)
 bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error, bool *truncated)
 {
     if (!s_results || !text || text_size == 0) return false;
-    xigua_ai_result_t result;
+    /* This API has one consumer, the LVGL task. Keep its copy off that stack. */
+    static xigua_ai_result_t result;
     if (xQueueReceive(s_results, &result, 0) != pdTRUE) return false;
     if (error) *error = result.error;
     if (result.error == ESP_OK) {
         bool clipped = xigua_text_copy(text, text_size, result.text);
         if (truncated) *truncated = result.truncated || clipped;
     }
-    else text[0] = '\0';
+    /* Failure preserves the caller's previous successful reply. */
     return true;
 }
