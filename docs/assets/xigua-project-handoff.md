@@ -158,6 +158,12 @@ Merged SHA-256:
 Matching ELF SHA-256:
 `47cbb2ae5b0e76b154a0fd0c11151682691f515b060fbf064a1c18aab3c075be`.
 Archive: `build/firmware/aa875be0e0cfbe9ddbd34ad484d67156376c1d1552ea3836810e81ba61d34046/`.
+Source checkpoint: `07289750efaf2633e8cdf53b9f95c2e3e143fcfb`. COM6
+segmented flash and write hashes PASS, preserving NVS and the voice partition.
+The startup ELF prefix `47cbb2ae5` matches the archive. Automatic built-in Wi-Fi
+obtained an IP at about ten seconds; public HTTPS and MiMo text self-check
+returned HTTP 200 / `ESP_OK`. Initial TLS heap: 124,144 bytes free, largest
+106,496 bytes. No panic appeared during the bounded startup observation.
 Physical recording and card rendering acceptance are pending.
 
 ## Remaining work

@@ -137,7 +137,11 @@ panic 日志或实机复测，仍不能确认重启的准确原因。
 对应 ELF SHA-256：
 `47cbb2ae5b0e76b154a0fd0c11151682691f515b060fbf064a1c18aab3c075be`。
 归档：`build/firmware/aa875be0e0cfbe9ddbd34ad484d67156376c1d1552ea3836810e81ba61d34046/`。
-录音及卡片显示的实机验收待进行。
+源码检查点：`07289750efaf2633e8cdf53b9f95c2e3e143fcfb`。COM6 分段刷写和写入
+哈希校验 PASS，保留 NVS 和录音分区。启动 ELF 前缀 `47cbb2ae5` 与归档一致。
+内置 Wi-Fi 自动联网约十秒取得 IP；公网 HTTPS 和 MiMo 文字自检返回 HTTP 200 /
+`ESP_OK`。首次 TLS 前可用堆 124,144 字节，最大块 106,496 字节。有限启动日志内
+未出现 panic。录音及卡片显示的实机验收待进行。
 
 ## 尚未完成和待改进
 
