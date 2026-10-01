@@ -3,12 +3,16 @@
 #include "bsp_battery.h"
 #include "bsp_display.h"
 #include "xigua_wifi.h"
+#include "xigua_ble.h"
 #include "xigua_ai.h"
 #include "xigua_keyboard.h"
 #include "xigua_ai_ui.h"
 #include "xigua_text.h"
 #include "xigua_menu.h"
 #include "xigua_sleep.h"
+#include "xigua_backend.h"
+#include "xigua_cloud_state.h"
+#include "xigua_care.h"
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -51,6 +55,10 @@ typedef enum {
     X_PAGE_TODAY,
     X_PAGE_SETTINGS,
     X_PAGE_WIFI,
+    X_PAGE_HANDOFF,
+    X_PAGE_REMINDERS,
+    X_PAGE_REMINDER_ALERT,
+    X_PAGE_CONFIRM_EDIT,
 } x_page_t;
 
 typedef enum {
@@ -58,6 +66,7 @@ typedef enum {
     X_WIFI_UI_SCAN,
     X_WIFI_UI_STATUS,
     X_WIFI_UI_EDIT_PASSWORD,
+    X_WIFI_UI_BLE,
 } x_wifi_ui_mode_t;
 
 typedef enum {
@@ -159,6 +168,7 @@ typedef struct {
 typedef struct {
     x_persisted_t data;
     x_sleep_times_t sleep_times;
+    uint64_t cloud_ids[X_EVENT_CAPACITY];
     int battery_soc;
     int64_t active_started_us;
     bool active_time_known;
@@ -175,6 +185,7 @@ typedef struct {
 typedef struct {
     x_persisted_t data;
     x_sleep_times_t sleep_times;
+    uint64_t cloud_ids[X_EVENT_CAPACITY];
     int64_t active_started_us;
     int64_t expires_us;
     bool active_time_known;
@@ -183,6 +194,9 @@ typedef struct {
     bool sleep_time_known;
 } x_undo_t;
 
+static xigua_cloud_state_t s_cloud;
+static bool s_cloud_loaded;
+static int64_t s_cloud_changed_us;
 static const uint32_t X_STATE_MAGIC = 0x58494741U;
 static const char *X_NVS_NAMESPACE = "xigua";
 
@@ -192,12 +206,15 @@ static lv_obj_t *s_body;
 static lv_obj_t *s_status;
 static lv_obj_t *s_hint;
 static lv_obj_t *s_battery;
+static lv_obj_t *s_clock;
+static lv_obj_t *s_network;
 static lv_obj_t *s_ai_panel;
 static lv_obj_t *s_ai_text;
-static lv_obj_t *s_ai_cards[3];
+static lv_obj_t *s_ai_cards[4];
 static lv_obj_t *s_home_panel;
 static lv_obj_t *s_home_summary;
 static lv_obj_t *s_home_cards[3];
+static lv_obj_t *s_care_panel, *s_care_text;
 /* Worker writes under s_mutex; the LVGL task adopts this undo after delivery. */
 static x_undo_t s_voice_undo;
 static x_ai_view_t s_ai_rendered_view = (x_ai_view_t)-1;
@@ -222,8 +239,23 @@ static bool s_ai_truncated;
 static x_ai_ui_t s_ai_ui = { .view = X_AI_READY, .pages = 1 };
 static int64_t s_ai_record_started_us;
 static bool s_ai_request_pending;
+static bool s_ai_pending_story;
+static char s_ai_audio_status[64];
 static char s_last_command_id[X_COMMAND_ID_MAX];
 static x_undo_t s_undo;
+static xigua_care_t s_care;
+static struct {
+    bool valid;
+    size_t slot;
+    uint64_t seq;
+    int64_t expires_us;
+    x_event_t before, after;
+} s_pending_edit;
+static uint32_t s_alert_id, s_alert_dismissed_id;
+static x_page_t s_alert_return_page;
+static size_t s_alert_return_focus;
+static char s_handoff_view[3072];
+static void format_local_handoff(const x_state_t *snapshot, char *out, size_t capacity);
 static x_wifi_ui_mode_t s_wifi_ui_mode = X_WIFI_UI_MENU;
 static char s_wifi_input_ssid[33];
 static char s_wifi_input_password[65];
@@ -243,7 +275,7 @@ static const char *const WIFI_KEYBOARD_CHARS[] = {
     "0123456789 !@#$%^&*()-_=+[]{};:'\\\",.<>/?\\|`~",
 };
 static const char *const WIFI_KEYBOARD_ACTIONS[] = {
-    "大写", "小写", "数字", "退格", "换页", "完成",
+    "大小写", "数字符号", "退格", "完成",
 };
 
 static const uint16_t TIMER_OPTIONS[] = { 5, 10, 20, 30 };
@@ -258,7 +290,16 @@ static const char *const ACTIVE_NAMES[] = {
     "", "睡眠", "洗澡", "趴玩", "计时"
 };
 static const char *const HOME_ITEMS[] = {
-    "AI助手", "手动记录", "今天", "睡眠", "声音", "Wi-Fi配网", "设置", "讲故事"
+    "AI助手", "儿歌", "讲故事", "手动记录", "今天", "睡眠", "Wi-Fi配网", "设置",
+    "照护交接", "提醒"
+};
+
+enum {
+    HOME_SOUND_INDEX = 1,
+    HOME_STORY_INDEX = 2,
+    HOME_RECORD_INDEX = 3,
+    HOME_TODAY_INDEX = 4,
+    HOME_SLEEP_INDEX = 5,
 };
 
 static bool valid_timer_minutes(uint16_t minutes)
@@ -296,10 +337,16 @@ static void apply_timezone(void)
 
 static esp_err_t state_save_locked(const char *command_id)
 {
+    if (s_cloud_loaded) {
+        memcpy(s_cloud.ids, s_state.cloud_ids, sizeof(s_cloud.ids));
+        s_cloud.revision++;
+        s_cloud_changed_us = esp_timer_get_time();
+    }
     esp_err_t err = nvs_set_blob(s_nvs, "state", &s_state.data, sizeof(s_state.data));
     s_state.sleep_times.magic = X_SLEEP_TIMES_MAGIC;
     if (err == ESP_OK) err = nvs_set_blob(s_nvs, "sleep_times", &s_state.sleep_times,
                                          sizeof(s_state.sleep_times));
+    if (err == ESP_OK && s_cloud_loaded) err = nvs_set_blob(s_nvs, "cloud_sync", &s_cloud, sizeof(s_cloud));
     if (err == ESP_OK && command_id && command_id[0] != '\0') {
         err = nvs_set_str(s_nvs, "last_cmd_id", command_id);
     }
@@ -347,6 +394,7 @@ static void undo_capture_locked(void)
 {
     s_undo.data = s_state.data;
     s_undo.sleep_times = s_state.sleep_times;
+    memcpy(s_undo.cloud_ids, s_state.cloud_ids, sizeof(s_undo.cloud_ids));
     s_undo.active_started_us = s_state.active_started_us;
     s_undo.active_time_known = s_state.active_time_known;
     s_undo.sleep_started_us = s_state.sleep_started_us;
@@ -371,6 +419,7 @@ static bool undo_last(void)
     }
     s_state.data = s_undo.data;
     s_state.sleep_times = s_undo.sleep_times;
+    memcpy(s_state.cloud_ids, s_undo.cloud_ids, sizeof(s_state.cloud_ids));
     s_state.active_started_us = s_undo.active_started_us;
     s_state.active_time_known = s_undo.active_time_known;
     s_state.sleep_started_us = s_undo.sleep_started_us;
@@ -388,6 +437,7 @@ static void append_event_locked(x_event_type_t type, uint16_t amount,
 {
     x_persisted_t *data = &s_state.data;
     uint8_t slot = data->event_head;
+    if (s_cloud_loaded) s_state.cloud_ids[slot] = s_cloud.next_seq++;
     memset(&s_state.sleep_times.entries[slot], 0, sizeof(s_state.sleep_times.entries[slot]));
     data->events[slot] = (x_event_t){
         .epoch = epoch > 0 ? epoch : (int64_t)time(NULL),
@@ -465,28 +515,27 @@ static void event_totals(const x_persisted_t *data, uint16_t *feed_count,
     }
 }
 
-static int64_t json_event_time(cJSON *object, const char *key)
+/* Retrospective records accept exact local dates or a bounded calendar-day offset.
+ * Invalid explicit times never silently turn into a record at the current time. */
+static bool care_event_time(cJSON *action, const char *key, bool optional, int64_t *out)
 {
-    cJSON *value = cJSON_GetObjectItemCaseSensitive(object, key);
-    if (cJSON_IsNumber(value) && value->valuedouble >= 0 && value->valuedouble < 0x1p63) {
-        return (int64_t)value->valuedouble;
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(action, key);
+    int64_t now = (int64_t)time(NULL);
+    if (!value) { *out = now; return optional; }
+    if (cJSON_IsNumber(value) && value->valuedouble >= X_MIN_VALID_EPOCH &&
+        value->valuedouble <= (double)(now + 60) && value->valuedouble == (double)(int64_t)value->valuedouble) {
+        *out = (int64_t)value->valuedouble;
+        return true;
     }
-    if (cJSON_IsString(value) && value->valuestring) {
-        int hour = -1;
-        int minute = -1;
-        if (sscanf(value->valuestring, "%d:%d", &hour, &minute) == 2 &&
-            hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
-            time_t now = time(NULL);
-            struct tm local_time;
-            if (now >= 1700000000 && localtime_r(&now, &local_time) != NULL) {
-                local_time.tm_hour = hour;
-                local_time.tm_min = minute;
-                local_time.tm_sec = 0;
-                return (int64_t)mktime(&local_time);
-            }
-        }
+    cJSON *days = cJSON_GetObjectItemCaseSensitive(action, "days_ago");
+    unsigned days_ago = 0;
+    if (days) {
+        if (!cJSON_IsNumber(days) || days->valueint < 0 || days->valueint > 365 ||
+            days->valuedouble != days->valueint) return false;
+        days_ago = (unsigned)days->valueint;
     }
-    return (int64_t)time(NULL);
+    return cJSON_IsString(value) &&
+        xigua_care_time(value->valuestring, now, days_ago, out) && *out <= now + 60;
 }
 
 static uint8_t ingredient_from_json(cJSON *value)
@@ -634,8 +683,9 @@ static bool apply_ai_action_locked(cJSON *action)
     if (strcmp(action_name, "start_sleep") == 0) return apply_sleep_action_locked(true);
     if (strcmp(action_name, "end_sleep") == 0) return apply_sleep_action_locked(false);
     int amount = 0;
-    int64_t event_time = cJSON_GetObjectItemCaseSensitive(action, "timestamp") ?
-        json_event_time(action, "timestamp") : json_event_time(action, "time");
+    int64_t event_time;
+    if (!care_event_time(action, cJSON_GetObjectItemCaseSensitive(action, "timestamp") ?
+                         "timestamp" : "time", true, &event_time)) return false;
     if (strcmp(action_name, "record_feeding") == 0) {
         if (!json_number_in_range(action, "amount_ml", 10, 400, &amount)) return false;
         uint8_t ingredient = ingredient_from_json(cJSON_GetObjectItemCaseSensitive(action, "ingredient"));
@@ -664,13 +714,23 @@ static bool apply_ai_action_locked(cJSON *action)
     }
     if (strcmp(action_name, "record_sleep") == 0) {
         int duration = 0;
-        if (!json_number_in_range(action, "duration_min", 0, 65535, &duration)) return false;
+        int64_t start_epoch = 0, end_epoch = event_time;
+        if (cJSON_GetObjectItemCaseSensitive(action, "start_time") ||
+            cJSON_GetObjectItemCaseSensitive(action, "end_time")) {
+            if (!care_event_time(action, "start_time", false, &start_epoch) ||
+                !care_event_time(action, "end_time", false, &end_epoch) || end_epoch < start_epoch ||
+                (end_epoch - start_epoch) / 60 > UINT16_MAX) return false;
+            duration = (int)((end_epoch - start_epoch) / 60);
+        } else if (!json_number_in_range(action, "duration_min", 0, 65535, &duration)) return false;
         cJSON *start = cJSON_GetObjectItemCaseSensitive(action, "start_timestamp");
         cJSON *end = cJSON_GetObjectItemCaseSensitive(action, "end_timestamp");
+        if (start || end) {
+            if (!care_event_time(action, "start_timestamp", false, &start_epoch) ||
+                !care_event_time(action, "end_timestamp", false, &end_epoch) || end_epoch < start_epoch ||
+                (end_epoch - start_epoch) / 60 != duration) return false;
+        }
         s_state.data.sleep_count++;
         s_state.data.sleep_minutes += (uint16_t)duration;
-        int64_t start_epoch = cJSON_IsNumber(start) ? json_event_time(action, "start_timestamp") : 0;
-        int64_t end_epoch = cJSON_IsNumber(end) ? json_event_time(action, "end_timestamp") : event_time;
         if (!xigua_sleep_running(s_state.data.sleep_end_epoch)) {
             s_state.data.sleep_start_epoch = start_epoch;
             s_state.data.sleep_end_epoch = end_epoch;
@@ -685,6 +745,126 @@ static bool apply_ai_action_locked(cJSON *action)
         return true;
     }
     return false;
+}
+
+static esp_err_t care_save_locked(void)
+{
+    esp_err_t err = nvs_set_blob(s_nvs, "care_v1", &s_care, sizeof(s_care));
+    return err == ESP_OK ? nvs_commit(s_nvs) : err;
+}
+
+static esp_err_t care_action_locked(cJSON *action, char *text, size_t capacity)
+{
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(action, "action");
+    static xigua_care_t before; /* Serialized by s_mutex; keep large blobs off worker stacks. */
+    before = s_care;
+    uint32_t id = 0;
+    bool applied = false;
+    if (!strcmp(name->valuestring, "create_reminder")) {
+        cJSON *title = cJSON_GetObjectItemCaseSensitive(action, "title");
+        int delay;
+        int64_t now = (int64_t)time(NULL), due = 0;
+        if (cJSON_GetObjectItemCaseSensitive(action, "delay_min")) {
+            if (cJSON_GetObjectItemCaseSensitive(action, "at") ||
+                !json_number_in_range(action, "delay_min", 1, 10080, &delay)) return ESP_ERR_INVALID_ARG;
+            due = now + (int64_t)delay * 60;
+        } else {
+            cJSON *at = cJSON_GetObjectItemCaseSensitive(action, "at");
+            if (!cJSON_IsString(at) || !xigua_care_time(at->valuestring, now, 0, &due))
+                return ESP_ERR_INVALID_ARG;
+        }
+        applied = cJSON_IsString(title) && xigua_care_add(&s_care, title->valuestring, due, now, &id);
+    } else {
+        int value;
+        if (json_number_in_range(action, "id", 1, INT32_MAX, &value)) {
+            id = (uint32_t)value;
+            applied = xigua_care_finish(&s_care, id);
+        }
+    }
+    if (!applied) { s_care = before; return ESP_ERR_INVALID_ARG; }
+    esp_err_t err = care_save_locked();
+    if (err != ESP_OK) { s_care = before; (void)care_save_locked(); return err; }
+    if (!strcmp(name->valuestring, "create_reminder")) {
+        for (size_t i = 0; i < XIGUA_REMINDER_CAPACITY; ++i) if (s_care.items[i].id == id) {
+            char when[20];
+            snprintf(text, capacity, "提醒已保存，编号%u。\n%s\n%s\n可在提醒页查看或取消。",
+                (unsigned)id, format_sleep_time(s_care.items[i].due_epoch, when, sizeof(when)),
+                s_care.items[i].title);
+        }
+    } else snprintf(text, capacity, "提醒%u已取消。", (unsigned)id);
+    return ESP_OK;
+}
+
+static esp_err_t stage_feed_edit_locked(cJSON *action, char *text, size_t capacity)
+{
+    s_pending_edit.valid = false;
+    int slot = -1;
+    for (size_t n = 0; n < s_state.data.event_count; ++n) {
+        size_t candidate = (s_state.data.event_head + X_EVENT_CAPACITY - 1 - n) % X_EVENT_CAPACITY;
+        if (s_state.data.events[candidate].type == X_EVENT_FEED) { slot = (int)candidate; break; }
+    }
+    if (slot < 0) return ESP_ERR_NOT_FOUND;
+    x_event_t edited = s_state.data.events[slot];
+    bool changed = false;
+    if (cJSON_GetObjectItemCaseSensitive(action, "amount_ml")) {
+        int amount;
+        if (!json_number_in_range(action, "amount_ml", 10, 400, &amount)) return ESP_ERR_INVALID_ARG;
+        edited.amount = (uint16_t)amount; changed = true;
+    }
+    if (cJSON_GetObjectItemCaseSensitive(action, "time")) {
+        if (!care_event_time(action, "time", false, &edited.epoch)) return ESP_ERR_INVALID_ARG;
+        changed = true;
+    }
+    if (cJSON_GetObjectItemCaseSensitive(action, "ingredient")) {
+        cJSON *ingredient = cJSON_GetObjectItemCaseSensitive(action, "ingredient");
+        if (!cJSON_IsString(ingredient) || ingredient_from_json(ingredient) > 1) return ESP_ERR_INVALID_ARG;
+        edited.ingredient = ingredient_from_json(ingredient); changed = true;
+    }
+    if (!changed) return ESP_ERR_INVALID_ARG;
+    s_pending_edit.slot = (size_t)slot;
+    s_pending_edit.seq = s_state.cloud_ids[slot];
+    s_pending_edit.before = s_state.data.events[slot];
+    s_pending_edit.after = edited;
+    s_pending_edit.expires_us = esp_timer_get_time() + 300000000LL;
+    s_pending_edit.valid = true;
+    char before_time[20], after_time[20];
+    snprintf(text, capacity, "请确认修改最近喂养\n原 %s %u毫升 %s\n新 %s %u毫升 %s",
+        format_sleep_time(s_pending_edit.before.epoch, before_time, sizeof(before_time)),
+        s_pending_edit.before.amount, FEED_INGREDIENTS[s_pending_edit.before.ingredient < 4 ?
+        s_pending_edit.before.ingredient : 3],
+        format_sleep_time(edited.epoch, after_time, sizeof(after_time)), edited.amount,
+        FEED_INGREDIENTS[edited.ingredient < 4 ? edited.ingredient : 3]);
+    return ESP_OK;
+}
+
+static esp_err_t confirm_feed_edit(bool save)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return ESP_ERR_TIMEOUT;
+    esp_err_t err = ESP_OK;
+    size_t slot = s_pending_edit.slot;
+    if (!save) s_pending_edit.valid = false;
+    else if (!s_pending_edit.valid || esp_timer_get_time() > s_pending_edit.expires_us ||
+             slot >= X_EVENT_CAPACITY || s_state.cloud_ids[slot] != s_pending_edit.seq ||
+             memcmp(&s_state.data.events[slot], &s_pending_edit.before, sizeof(x_event_t))) {
+        err = ESP_ERR_INVALID_STATE;
+    } else {
+        undo_capture_locked();
+        s_state.data.events[slot] = s_pending_edit.after;
+        s_state.data.milk_ml = s_pending_edit.after.amount;
+        s_state.data.milk_ingredient = s_pending_edit.after.ingredient;
+        s_state.data.last_milk_epoch = s_pending_edit.after.epoch;
+        err = state_save_locked(NULL);
+        if (err != ESP_OK) {
+            s_state.data = s_undo.data;
+            s_state.sleep_times = s_undo.sleep_times;
+            memcpy(s_state.cloud_ids, s_undo.cloud_ids, sizeof(s_state.cloud_ids));
+            (void)state_save_locked(NULL);
+            undo_clear();
+        }
+        s_pending_edit.valid = false;
+    }
+    xSemaphoreGive(s_mutex);
+    return err;
 }
 
 esp_err_t xigua_app_process_ai_reply(char *text, size_t capacity, bool truncated)
@@ -706,6 +886,15 @@ esp_err_t xigua_app_process_ai_reply(char *text, size_t capacity, bool truncated
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
         cJSON_Delete(root); return ESP_ERR_TIMEOUT;
     }
+    cJSON *action_name = cJSON_GetObjectItemCaseSensitive(action, "action");
+    if (cJSON_IsString(action_name) && (!strcmp(action_name->valuestring, "edit_last_feeding") ||
+        !strcmp(action_name->valuestring, "create_reminder") || !strcmp(action_name->valuestring, "cancel_reminder"))) {
+        esp_err_t care_err = !strcmp(action_name->valuestring, "edit_last_feeding") ?
+            stage_feed_edit_locked(action, text, capacity) : care_action_locked(action, text, capacity);
+        xSemaphoreGive(s_mutex);
+        cJSON_Delete(root);
+        return care_err;
+    }
     x_state_t before = s_state;
     esp_err_t err = apply_ai_action_locked(action) ? state_save_locked(NULL) : ESP_ERR_INVALID_ARG;
     if (err == ESP_OK) {
@@ -713,6 +902,7 @@ esp_err_t xigua_app_process_ai_reply(char *text, size_t capacity, bool truncated
             .active_started_us = before.active_started_us,
             .active_time_known = before.active_time_known, .sleep_started_us = before.sleep_started_us,
             .sleep_time_known = before.sleep_time_known, .valid = true };
+        memcpy(s_voice_undo.cloud_ids, before.cloud_ids, sizeof(s_voice_undo.cloud_ids));
         cJSON *name = cJSON_GetObjectItemCaseSensitive(action, "action");
         if (strcmp(name->valuestring, "record_feeding") == 0) {
             char details[128];
@@ -900,6 +1090,7 @@ static void wifi_ui_clear_input(void)
 
 static void wifi_ui_enter_menu(void)
 {
+    if (s_wifi_ui_mode==X_WIFI_UI_BLE) xigua_ble_end();
     wifi_ui_clear_input();
     s_wifi_ui_mode = X_WIFI_UI_MENU;
     s_focus = 0;
@@ -990,29 +1181,23 @@ static void wifi_ui_choose_key(void)
     size_t action = s_wifi_keyboard_index - char_count;
     switch (action) {
     case 0:
-        s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
+        if (s_wifi_keyboard_mode == X_WIFI_KEY_UPPER) {
+            s_wifi_keyboard_mode = X_WIFI_KEY_LOWER;
+        } else {
+            s_wifi_keyboard_mode = X_WIFI_KEY_UPPER;
+        }
         s_wifi_keyboard_index = 0;
         s_wifi_keyboard_page = 0;
         break;
     case 1:
-        s_wifi_keyboard_mode = X_WIFI_KEY_LOWER;
-        s_wifi_keyboard_index = 0;
-        s_wifi_keyboard_page = 0;
-        break;
-    case 2:
         s_wifi_keyboard_mode = X_WIFI_KEY_DIGIT_SYMBOL;
         s_wifi_keyboard_index = 0;
         s_wifi_keyboard_page = 0;
         break;
-    case 3:
+    case 2:
         wifi_ui_backspace();
         break;
-    case 4:
-        s_wifi_keyboard_page = (s_wifi_keyboard_page + 1) %
-            xigua_keyboard_page_count(char_count);
-        s_wifi_keyboard_index = s_wifi_keyboard_page * XIGUA_KEYBOARD_PAGE_KEYS;
-        break;
-    case 5:
+    case 3:
         wifi_ui_finish_edit();
         break;
     default:
@@ -1072,12 +1257,67 @@ static void ui_shell(void)
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(0x101820), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
-    s_title = make_label(s_screen, 16, 10, 180, 28, "西瓜助手", 0xFFFFFF, 20);
-    s_battery = make_label(s_screen, 188, 12, 40, 22, "--%", 0xB9C7D1, 14);
+    /* Keep the first row inside the rounded corners; page titles use row two. */
+    s_clock = make_label(s_screen, 30, 8, 50, 19, "--:--", 0xB9C7D1, 14);
+    s_network = make_label(s_screen, 86, 8, 92, 19, "未连接", 0xB9C7D1, 16);
+    s_battery = make_label(s_screen, 184, 8, 40, 19, "--%", 0xB9C7D1, 14);
+    lv_obj_set_style_text_font(s_clock, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_battery, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_align(s_network, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_align(s_battery, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(s_clock, LV_LABEL_LONG_CLIP);
+    lv_label_set_long_mode(s_network, LV_LABEL_LONG_CLIP);
+    lv_label_set_long_mode(s_battery, LV_LABEL_LONG_CLIP);
+    s_title = make_label(s_screen, 18, 30, 204, 22, "西瓜助手", 0xFFFFFF, 20);
     s_body = make_label(s_screen, 18, 54, 204, 190, "正在加载…", 0xFFFFFF, 20);
     s_status = make_label(s_screen, 18, 246, 204, 28, "", 0x69D2E7, 14);
     s_hint = make_label(s_screen, 14, 274, 212, 42, "上/下选择  确认键打开", 0xB9C7D1, 14);
     lv_screen_load(s_screen);
+}
+
+/* Called in the LVGL task or under its lock, even when page content is idle. */
+static void ui_refresh_top_bar(void)
+{
+    if (!s_clock || !s_network || !s_battery) return;
+    time_t now = time(NULL);
+    struct tm local;
+    char clock[6] = "--:--";
+    if (now >= X_MIN_VALID_EPOCH && localtime_r(&now, &local) &&
+        !strftime(clock, sizeof(clock), "%H:%M", &local))
+        memcpy(clock, "--:--", sizeof(clock));
+    lv_label_set_text(s_clock, clock);
+
+    const char *network = "未连接";
+    uint32_t color = 0xB9C7D1;
+    switch (xigua_wifi_state()) {
+    case XIGUA_WIFI_STARTING: network = "启动中"; color = 0x69D2E7; break;
+    case XIGUA_WIFI_READY: network = "待连接"; break;
+    case XIGUA_WIFI_CONNECTING: network = "连接中"; color = 0x69D2E7; break;
+    case XIGUA_WIFI_FAILED: network = "连接失败"; color = 0xFFBE79; break;
+    case XIGUA_WIFI_CONNECTED:
+        network = "已连接"; color = 0x69D2E7;
+        switch (xigua_ai_health()) {
+        case XIGUA_AI_HEALTH_CHECKING: network = "自检中"; break;
+        case XIGUA_AI_HEALTH_NETWORK_FAILED:
+            network = "联网失败"; color = 0xFFBE79; break;
+        case XIGUA_AI_HEALTH_READY:
+        case XIGUA_AI_HEALTH_MODEL_FAILED:
+            /* A model failure does not invalidate a successful HTTPS probe. */
+            network = "已联网"; color = 0x91D8A6; break;
+        default: break;
+        }
+        break;
+    default: break;
+    }
+    lv_label_set_text(s_network, network);
+    lv_obj_set_style_text_color(s_network, lv_color_hex(color), 0);
+
+    if (s_mutex && xSemaphoreTake(s_mutex, 0) == pdTRUE) {
+        int soc = s_state.battery_soc;
+        xSemaphoreGive(s_mutex);
+        if (soc >= 0 && soc <= 100) lv_label_set_text_fmt(s_battery, "%d%%", soc);
+        else lv_label_set_text(s_battery, "--%");
+    }
 }
 
 static void ui_set_title(const char *title)
@@ -1110,10 +1350,11 @@ static void wifi_ui_create_keyboard(void)
     for (size_t i = 0; i < XIGUA_KEYBOARD_PAGE_KEYS + XIGUA_KEYBOARD_ACTIONS; ++i) {
         bool action = i >= XIGUA_KEYBOARD_PAGE_KEYS;
         size_t slot = action ? i - XIGUA_KEYBOARD_PAGE_KEYS : i;
-        int x = action ? (int)(slot % 3) * 68 : (int)(slot % 6) * 34;
-        int y = action ? 136 + (int)(slot / 3) * 26 : 24 + (int)(slot / 6) * 22;
-        lv_obj_t *key = make_label(s_wifi_keyboard, x, y, action ? 64 : 30,
-                                   action ? 24 : 20, "", 0xFFFFFF, 16);
+        int x = action ? (int)slot * 51 : (int)(slot % 6) * 34;
+        int y = action ? 140 : 24 + (int)(slot / 6) * 22;
+        lv_obj_t *key = make_label(s_wifi_keyboard, x, y, action ? 50 : 30,
+                                   action ? 26 : 20, "", 0xFFFFFF,
+                                   action ? 14 : 16);
         lv_obj_set_style_text_align(key, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_pad_top(key, 1, 0);
         lv_obj_set_style_bg_opa(key, LV_OPA_COVER, 0);
@@ -1121,6 +1362,10 @@ static void wifi_ui_create_keyboard(void)
         s_wifi_key_labels[i] = key;
     }
     lv_obj_add_flag(s_wifi_keyboard, LV_OBJ_FLAG_HIDDEN);
+    lv_mem_monitor_t memory;
+    lv_mem_monitor(&memory);
+    ESP_LOGI("xigua_ui", "Wi-Fi keyboard memory free=%u largest=%u used=%u%%",
+             (unsigned)memory.free_size,(unsigned)memory.free_biggest_size,(unsigned)memory.used_pct);
 }
 
 static void wifi_ui_render_keyboard(void)
@@ -1178,6 +1423,10 @@ static bool ai_request_voice_current_mode(void)
         snprintf(s_feedback, sizeof(s_feedback), "Wi-Fi未连接，请先完成配网");
         return false;
     }
+    if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        s_pending_edit.valid = false;
+        xSemaphoreGive(s_mutex);
+    }
     esp_err_t request_err = s_page == X_PAGE_STORY ? xigua_ai_request_story() :
                                                      xigua_ai_request_voice();
     if (request_err != ESP_OK) {
@@ -1185,6 +1434,8 @@ static bool ai_request_voice_current_mode(void)
         return false;
     }
     s_ai_request_pending = true;
+    s_ai_pending_story = s_page == X_PAGE_STORY;
+    s_ai_audio_status[0] = '\0';
     s_ai_record_started_us = esp_timer_get_time();
     snprintf(s_feedback, sizeof(s_feedback), "正在录音，松开确认键结束（最长60秒）");
     return true;
@@ -1234,13 +1485,13 @@ static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper, bo
             continue;
         }
         lv_obj_remove_flag(s_home_cards[i], LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(s_home_cards[i], first + i == 3 ?
+        lv_label_set_text(s_home_cards[i], first + i == HOME_SLEEP_INDEX ?
                           (sleeping ? "结束睡眠" : "开始睡眠") : HOME_ITEMS[first + i]);
         ui_menu_focus(s_home_cards[i], first + i == s_focus);
     }
     if (!s_feedback[0]) lv_label_set_text_fmt(s_status, "菜单 %u / 3", (unsigned)(first / 3 + 1));
-    ui_set_hint(s_focus != 3 && undo_available() ? "确认撤销最近记录\n上/下选择" :
-                s_focus == 3 ? (sleeping ? "确认结束睡眠\n上/下选择其他功能" :
+    ui_set_hint(s_focus != HOME_SLEEP_INDEX && undo_available() ? "确认撤销最近记录\n上/下选择" :
+                s_focus == HOME_SLEEP_INDEX ? (sleeping ? "确认结束睡眠\n上/下选择其他功能" :
                                           "确认开始睡眠\n上/下选择其他功能") :
                 "上/下选择  确认打开\n长按上键快速喂奶");
 }
@@ -1257,6 +1508,8 @@ static void ui_ai_render(void)
     }
     lv_obj_add_flag(s_body, LV_OBJ_FLAG_HIDDEN);
     bool cards = s_ai_ui.view == X_AI_READY || s_ai_ui.view == X_AI_ACTIONS;
+    bool four_actions = s_ai_ui.view == X_AI_ACTIONS;
+    size_t card_count = four_actions ? 4 : 3;
     if (s_ai_rendered_view != s_ai_ui.view) {
         lv_obj_clean(s_ai_panel);
         memset(s_ai_cards, 0, sizeof(s_ai_cards));
@@ -1272,11 +1525,19 @@ static void ui_ai_render(void)
             if (s_ai_ui.page >= s_ai_ui.pages) s_ai_ui.page = s_ai_ui.pages - 1;
         }
         if (cards) {
-            for (size_t i = 0; i < 3; ++i) {
-                s_ai_cards[i] = ui_menu_card(s_ai_panel, 54 + (int)i * 44);
+            for (size_t i = 0; i < card_count; ++i) {
+                s_ai_cards[i] = ui_menu_card(s_ai_panel, four_actions ? 50 + (int)i * 34 : 54 + (int)i * 44);
+                if (four_actions) {
+                    lv_obj_set_height(s_ai_cards[i], 30);
+                    lv_obj_set_style_pad_top(s_ai_cards[i], 3, 0);
+                }
             }
         }
         s_ai_rendered_view = s_ai_ui.view;
+        lv_mem_monitor_t memory;
+        lv_mem_monitor(&memory);
+        ESP_LOGI("xigua_ui", "AI view=%d memory free=%u largest=%u used=%u%%",
+                 (int)s_ai_ui.view,(unsigned)memory.free_size,(unsigned)memory.free_biggest_size,(unsigned)memory.used_pct);
     }
     char progress[160];
     ui_set_title(s_ai_ui.view == X_AI_READING ? (s_page == X_PAGE_STORY ? "故事" : "AI回复") :
@@ -1284,23 +1545,33 @@ static void ui_ai_render(void)
                  (s_page == X_PAGE_STORY ? "讲故事" : "AI助手"));
     if (cards) {
         const char *const ready[] = { "长按确认说话", "查看上次回复", "返回" };
-        const char *const actions[] = { "继续查看", "再问一次", "返回" };
+        const char *const actions[] = { "继续查看", "再问一次", "返回",
+            s_ai_ui.paused ? "继续朗读" : s_ai_ui.speaking ? "暂停朗读" : "朗读回复" };
+        const char *const story_labels[] = {
+            s_ai_ui.paused ? "继续朗读" : s_ai_ui.speaking ? "暂停朗读" : "开始朗读",
+            "从头重读", "继续查看", "再讲一个"
+        };
         lv_label_set_text(s_ai_text, s_ai_ui.view == X_AI_READY ?
                           (s_page == X_PAGE_STORY ? "长按确认说话\n松开后自动讲故事" :
                                                     "长按确认说话\n松开结束录音") :
                           "请选择操作\n回复仍可查看");
-        for (size_t i = 0; i < 3; ++i) {
+        for (size_t i = 0; i < card_count; ++i) {
             lv_obj_t *card = s_ai_cards[i];
-            lv_label_set_text(card, s_ai_ui.view == X_AI_READY ? ready[i] : actions[i]);
+            lv_label_set_text(card, s_ai_ui.view == X_AI_READY ? ready[i] :
+                              s_ai_ui.story_reply ? story_labels[i] : actions[i]);
             ui_menu_focus(card, i == s_ai_ui.focus);
         }
-        lv_label_set_text(s_status, s_ai_ui.view == X_AI_ACTIONS ? "回复仍可查看" : s_feedback);
+        lv_label_set_text(s_status, s_ai_ui.view == X_AI_ACTIONS ?
+                          (s_ai_ui.story_reply && s_ai_audio_status[0] ? s_ai_audio_status :
+                           "回复仍可查看") : s_feedback);
         ui_set_hint("上/下选择  确认打开\n长按下键返回");
     } else if (s_ai_ui.view == X_AI_READING) {
         lv_obj_set_y(s_ai_text, -(int32_t)(s_ai_ui.page * 190));
-        lv_label_set_text_fmt(s_status, "%s %u / %u", s_ai_truncated ? "部分回复" : "回复",
+        lv_label_set_text_fmt(s_status, "%s %u / %u", s_ai_ui.story_reply && s_ai_audio_status[0] ?
+                              s_ai_audio_status : s_ai_truncated ? "部分回复" : "回复",
                               (unsigned)s_ai_ui.page + 1, (unsigned)s_ai_ui.pages);
-        ui_set_hint("上/下换页  确认打开操作\n长按下键返回");
+        ui_set_hint(s_ai_ui.story_reply ? "上/下换页 确认打开朗读操作\n长按下键返回" :
+                    "上/下换页  确认打开操作\n长按下键返回");
     } else {
         if (s_ai_ui.view == X_AI_RECORDING) {
             unsigned seconds = (unsigned)((esp_timer_get_time() - s_ai_record_started_us) / 1000000);
@@ -1324,6 +1595,7 @@ static void ui_ai_render(void)
 
 static void ui_refresh_page(void)
 {
+    ui_refresh_top_bar();
     if (!s_body || !s_mutex) return;
     x_state_t snapshot;
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
@@ -1343,6 +1615,43 @@ static void ui_refresh_page(void)
                  &timer_count);
     xigua_wifi_status(wifi_ssid, sizeof(wifi_ssid), wifi_ip, sizeof(wifi_ip));
     switch (s_page) {
+    case X_PAGE_HANDOFF:
+        ui_set_title("照护交接");
+        text[0] = 0;
+        ui_set_hint("上/下换页 确认键朗读\n长按下键返回");
+        break;
+    case X_PAGE_CONFIRM_EDIT:
+        ui_set_title("确认修改");
+        xigua_text_copy(text, sizeof(text), s_ai_reply);
+        ui_set_hint(s_focus ? "确认键保存修改\n上/下切换 长按下键取消" :
+                             "确认键取消修改\n上/下切换选择保存");
+        break;
+    case X_PAGE_REMINDERS:
+    case X_PAGE_REMINDER_ALERT:
+        {
+            ui_set_title(s_page == X_PAGE_REMINDER_ALERT ? "提醒到了" : "提醒");
+            xigua_reminder_t item = {0};
+            if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                if (s_page == X_PAGE_REMINDER_ALERT) {
+                    for (size_t i = 0; i < XIGUA_REMINDER_CAPACITY; ++i)
+                        if (s_care.items[i].id == s_alert_id) item = s_care.items[i];
+                } else {
+                    size_t n = 0;
+                    for (size_t i = 0; i < XIGUA_REMINDER_CAPACITY; ++i)
+                        if (s_care.items[i].id && n++ == s_focus) { item = s_care.items[i]; break; }
+                }
+                xSemaphoreGive(s_mutex);
+            }
+            char when[20];
+            if (!item.id) snprintf(text, sizeof(text), "暂无提醒\n\n在AI助手中说：\n20分钟后提醒我收东西");
+            else snprintf(text, sizeof(text), "编号%u  %s\n%s\n%s",
+                (unsigned)item.id, format_sleep_time(item.due_epoch, when, sizeof(when)), item.title,
+                s_page == X_PAGE_REMINDER_ALERT ? (s_focus ? "> 10分钟后再提醒" : "> 已完成") :
+                wall_clock_known() ? "确认键取消这条提醒" : "时间待校准，暂不触发");
+            ui_set_hint(s_page == X_PAGE_REMINDER_ALERT ? "上/下选择 确认键执行\n长按下键稍后查看" :
+                "上/下查看 确认键取消\n长按下键返回");
+        }
+        break;
     case X_PAGE_OVERVIEW:
         ui_set_title("西瓜助手");
         {
@@ -1407,9 +1716,18 @@ static void ui_refresh_page(void)
         break;
     case X_PAGE_SOUND:
         ui_set_title("儿歌/白噪音");
-        snprintf(text, sizeof(text), "%c 儿歌\n%c 白噪音\n%c 停止\n\n服务端流式待接入",
-                 s_focus == 0 ? '>' : ' ', s_focus == 1 ? '>' : ' ', s_focus == 2 ? '>' : ' ');
-        ui_set_hint("上/下选择  确认键播放/暂停  长按下键返回");
+        {
+            char cloud_status[96], title[96];
+            bool white=false;
+            size_t count=xigua_backend_catalog_item(s_focus,title,sizeof(title),&white);
+            if (s_focus>=count+3) s_focus=count+2;
+            xigua_backend_status(cloud_status, sizeof(cloud_status));
+            if (s_focus<count) snprintf(text,sizeof(text),"%s %u/%u\n\n%s\n\n%s",
+                white?"白噪音":"儿歌",(unsigned)(s_focus+1),(unsigned)count,title,cloud_status);
+            else snprintf(text,sizeof(text),"%s\n\n%s",
+                s_focus==count?(xigua_ai_backend_paused()?"继续":"暂停"):s_focus==count+1?"停止":"刷新",cloud_status);
+        }
+        ui_set_hint("上/下选择  确认键播放/停止  长按下键返回");
         break;
     case X_PAGE_TODAY:
         ui_set_title("今天");
@@ -1471,17 +1789,21 @@ static void ui_refresh_page(void)
         break;
     case X_PAGE_WIFI:
         if (s_wifi_ui_mode == X_WIFI_UI_MENU) {
-            const size_t item_count = 1;
+            const size_t item_count = 2;
             ui_set_title("Wi-Fi设置");
             int used = snprintf(text, sizeof(text), "状态：%s\n自检：%s\n\n",
                                 wifi_state_name(xigua_wifi_state()),
                                 ai_health_name(xigua_ai_health()));
-            const char *labels[] = { "扫描附近 Wi-Fi" };
+            const char *labels[] = { "扫描附近 Wi-Fi", "手机蓝牙配网" };
             for (size_t i = 0; i < item_count && used > 0 && (size_t)used < sizeof(text); i++) {
                 used += snprintf(text + used, sizeof(text) - (size_t)used, "%c %s\n",
                                  s_focus == i ? '>' : ' ', labels[i]);
             }
             ui_set_hint("上/下选择  确认键进入  长按下键返回");
+        } else if (s_wifi_ui_mode == X_WIFI_UI_BLE) {
+            ui_set_title("手机蓝牙配网");
+            xigua_ble_screen(text,sizeof(text));
+            ui_set_hint("确认关闭  长按下键返回");
         } else if (s_wifi_ui_mode == X_WIFI_UI_SCAN) {
             ui_set_title("选择 Wi-Fi");
             if (xigua_wifi_scan_in_progress()) {
@@ -1507,7 +1829,7 @@ static void ui_refresh_page(void)
             snprintf(text, sizeof(text), "SSID：%s", s_wifi_input_ssid);
             if (!s_wifi_keyboard) wifi_ui_create_keyboard();
             wifi_ui_render_keyboard();
-            ui_set_hint("上/下移动 2次换行\n确认选择 长按确认完成");
+            ui_set_hint("上/下移动，末尾自动翻页\n确认选择，长按确认完成");
         } else {
             ui_set_title("Wi-Fi状态");
             if (xigua_wifi_state() == XIGUA_WIFI_CONNECTED) {
@@ -1539,11 +1861,32 @@ static void ui_refresh_page(void)
         }
         lv_obj_remove_flag(s_status, LV_OBJ_FLAG_HIDDEN);
     }
-    ui_set_body_font(s_page == X_PAGE_WIFI ? 16 : 20);
+    ui_set_body_font(s_page == X_PAGE_WIFI || s_page == X_PAGE_CONFIRM_EDIT ? 16 : 20);
     lv_obj_remove_flag(s_body, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(s_body, text);
-    if (snapshot.battery_soc >= 0) lv_label_set_text_fmt(s_battery, "%d%%", snapshot.battery_soc);
     if (s_status) lv_label_set_text(s_status, s_feedback);
+    if (s_page == X_PAGE_HANDOFF) {
+        if (!s_care_panel) {
+            s_care_panel = lv_obj_create(s_screen);
+            lv_obj_remove_style_all(s_care_panel);
+            lv_obj_remove_flag(s_care_panel, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_set_pos(s_care_panel, 18, 54);
+            lv_obj_set_size(s_care_panel, 204, 190);
+            s_care_text = make_label(s_care_panel, 0, 0, 204, LV_SIZE_CONTENT, "", 0xFFFFFF, 20);
+            lv_obj_set_style_text_font(s_care_text, &xigua_font_full20, 0);
+            lv_obj_set_style_text_line_space(s_care_text, 0, 0);
+        }
+        lv_obj_add_flag(s_body, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_care_text, s_handoff_view);
+        lv_point_t size;
+        lv_text_get_size(&size, s_handoff_view, &xigua_font_full20, 0, 0, 204, LV_TEXT_FLAG_NONE);
+        size_t pages = x_ai_page_count((size_t)size.y, 190);
+        if (s_focus >= pages) s_focus = pages - 1;
+        lv_obj_set_y(s_care_text, -(int32_t)(s_focus * 190));
+        lv_label_set_text_fmt(s_status, "交接 %u / %u", (unsigned)s_focus + 1, (unsigned)pages);
+    } else if (s_care_panel) {
+        lv_obj_delete(s_care_panel); s_care_panel = s_care_text = NULL;
+    }
     if (s_page == X_PAGE_OVERVIEW) ui_home_render(snapshot.data.milk_ml, sleep_count,
         (unsigned)(pee_count + poop_count), xigua_sleep_running(snapshot.data.sleep_end_epoch),
         snapshot.data.sleep_start_epoch);
@@ -1564,14 +1907,30 @@ static void ui_refresh_page(void)
 static void ui_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
+    ui_refresh_top_bar();
+    if (s_page != X_PAGE_REMINDER_ALERT && s_page != X_PAGE_CONFIRM_EDIT &&
+        xigua_ai_voice_phase() != XIGUA_AI_VOICE_RECORDING &&
+        xigua_ai_voice_phase() != XIGUA_AI_VOICE_TRANSCRIBING &&
+        xigua_ai_voice_phase() != XIGUA_AI_VOICE_THINKING && !s_ai_request_pending &&
+        xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        const xigua_reminder_t *due = xigua_care_due(&s_care, (int64_t)time(NULL), s_alert_dismissed_id);
+        if (due) {
+            s_alert_id = due->id;
+            s_alert_return_page = s_page; s_alert_return_focus = s_focus;
+            s_page = X_PAGE_REMINDER_ALERT; s_focus = 0;
+        }
+        xSemaphoreGive(s_mutex);
+        if (due) { (void)xigua_ai_reminder_tone(); ui_refresh_page(); }
+    }
     bool had_undo = s_undo.valid;
     bool undo_still_available = undo_available();
     if ((s_page == X_PAGE_ACTIVE && !s_confirm_abort) || s_page == X_PAGE_TODAY) ui_refresh_page();
     else if (had_undo && !undo_still_available && s_page == X_PAGE_OVERVIEW) ui_refresh_page();
-    else if (s_page == X_PAGE_SETTINGS ||
+    else if (s_page == X_PAGE_SOUND || s_page == X_PAGE_SETTINGS || s_page == X_PAGE_REMINDERS ||
              (s_page == X_PAGE_WIFI && (s_wifi_ui_mode == X_WIFI_UI_STATUS ||
                                         s_wifi_ui_mode == X_WIFI_UI_MENU ||
-                                        s_wifi_ui_mode == X_WIFI_UI_SCAN))) ui_refresh_page();
+                                        s_wifi_ui_mode == X_WIFI_UI_SCAN ||
+                                        s_wifi_ui_mode == X_WIFI_UI_BLE))) ui_refresh_page();
     if (s_ai_request_pending && (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY)) {
         switch (xigua_ai_voice_phase()) {
         case XIGUA_AI_VOICE_RECORDING:
@@ -1586,7 +1945,6 @@ static void ui_timer_cb(lv_timer_t *timer)
             snprintf(s_feedback, sizeof(s_feedback), "正在请求 Mimo");
             break;
         case XIGUA_AI_VOICE_SPEAKING:
-            s_ai_ui.view = X_AI_WAITING;
             snprintf(s_feedback, sizeof(s_feedback), "正在播放故事");
             break;
         default:
@@ -1602,6 +1960,9 @@ static void ui_timer_cb(lv_timer_t *timer)
         s_ai_request_pending = false;
         if (ai_error == ESP_OK) {
             s_ai_truncated = truncated;
+            s_ai_ui.story_reply = s_ai_pending_story;
+            s_ai_ui.paused = xigua_ai_voice_phase() == XIGUA_AI_VOICE_PAUSED;
+            s_ai_ui.speaking = s_ai_ui.paused || xigua_ai_voice_phase() == XIGUA_AI_VOICE_SPEAKING;
             s_ai_rendered_view = (x_ai_view_t)-1;
         } else snprintf(s_ai_error, sizeof(s_ai_error), "%s", esp_err_to_name(ai_error));
         x_ai_complete(&s_ai_ui, ai_error == ESP_OK);
@@ -1610,12 +1971,50 @@ static void ui_timer_cb(lv_timer_t *timer)
         if (ai_error == ESP_OK && ui_take_voice_undo()) {
             snprintf(s_feedback, sizeof(s_feedback), "AI记录已保存");
         }
+        if (ai_error == ESP_OK && s_pending_edit.valid && s_page == X_PAGE_VOICE) {
+            s_page = X_PAGE_CONFIRM_EDIT; s_focus = 0;
+            snprintf(s_feedback, sizeof(s_feedback), "尚未修改原记录");
+        }
+        else if (s_pending_edit.valid && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            s_pending_edit.valid = false;
+            xSemaphoreGive(s_mutex);
+        }
+        ui_refresh_page();
+    }
+    xigua_ai_audio_state_t audio_state;
+    if (xigua_ai_take_audio_state(&audio_state)) {
+        s_ai_ui.paused = xigua_ai_voice_phase() == XIGUA_AI_VOICE_PAUSED;
+        s_ai_ui.speaking = s_ai_ui.paused || xigua_ai_voice_phase() == XIGUA_AI_VOICE_SPEAKING;
+        snprintf(s_ai_audio_status, sizeof(s_ai_audio_status), "%s",
+                 audio_state == XIGUA_AI_AUDIO_PLAYING ? "正在朗读" :
+                 audio_state == XIGUA_AI_AUDIO_PAUSED ? "已暂停朗读" :
+                 audio_state == XIGUA_AI_AUDIO_BUFFERING ? "正在缓冲语音" :
+                 audio_state == XIGUA_AI_AUDIO_FAILED ? "朗读失败，可重试" :
+                 audio_state == XIGUA_AI_AUDIO_STOPPED ? "已停止朗读" : "朗读完毕");
         ui_refresh_page();
     }
 }
 
 static void go_page(x_page_t page, size_t focus)
 {
+    if (s_page==X_PAGE_WIFI && s_wifi_ui_mode==X_WIFI_UI_BLE && page!=X_PAGE_WIFI) xigua_ble_end();
+    if (s_page == X_PAGE_CONFIRM_EDIT && page != X_PAGE_CONFIRM_EDIT) {
+        if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            s_pending_edit.valid = false;
+            xSemaphoreGive(s_mutex);
+        }
+    }
+    if (page == X_PAGE_HANDOFF && s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        format_local_handoff(&s_state, s_handoff_view, sizeof(s_handoff_view));
+        xSemaphoreGive(s_mutex);
+        size_t used = strlen(s_handoff_view);
+        if (used + 48 < sizeof(s_handoff_view)) {
+            used += (size_t)snprintf(s_handoff_view + used, sizeof(s_handoff_view) - used, "\n\n云端交接与留言：\n");
+            if (!xigua_backend_handoff(s_handoff_view + used, sizeof(s_handoff_view) - used))
+                snprintf(s_handoff_view + used, sizeof(s_handoff_view) - used, "尚未取得云端数据");
+        }
+    }
+    if (page==X_PAGE_VOICE || page==X_PAGE_STORY) xigua_backend_stop_sound();
     s_page = page;
     s_focus = focus;
     s_confirm_abort = false;
@@ -1628,6 +2027,20 @@ static void ui_sync(void)
         ui_refresh_page();
         bsp_lvgl_unlock();
     }
+}
+
+static esp_err_t finish_reminder(uint32_t id, bool snooze)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return ESP_ERR_TIMEOUT;
+    static xigua_care_t before;
+    before = s_care;
+    bool changed = snooze ? xigua_care_snooze(&s_care, id, (int64_t)time(NULL)) :
+                            xigua_care_finish(&s_care, id);
+    esp_err_t err = changed ? care_save_locked() : ESP_ERR_INVALID_STATE;
+    if (err != ESP_OK) { s_care = before; if (changed) (void)care_save_locked(); }
+    if (err == ESP_OK) s_alert_dismissed_id = 0;
+    xSemaphoreGive(s_mutex);
+    return err;
 }
 
 static void save_simple_record(x_active_t active)
@@ -1677,7 +2090,7 @@ static void toggle_sleep(void)
     if (err == ESP_OK) {
         (void)ui_take_voice_undo();
         (void)xigua_text_copy(s_feedback, sizeof(s_feedback), reply);
-        go_page(sleeping ? X_PAGE_TODAY : X_PAGE_OVERVIEW, sleeping ? 1 : 3);
+        go_page(sleeping ? X_PAGE_TODAY : X_PAGE_OVERVIEW, sleeping ? 1 : HOME_SLEEP_INDEX);
     } else snprintf(s_feedback, sizeof(s_feedback), "睡眠操作失败：%s", esp_err_to_name(err));
 }
 
@@ -1765,7 +2178,8 @@ void xigua_app_exit(void)
         lv_obj_delete(s_screen);
         s_screen = NULL;
     }
-    s_title = s_body = s_status = s_hint = s_battery = NULL;
+    s_title = s_body = s_status = s_hint = s_battery = s_clock = s_network = NULL;
+    s_care_panel = s_care_text = NULL;
     s_wifi_keyboard = s_wifi_password = NULL;
     s_ai_panel = s_ai_text = NULL;
     s_home_panel = s_home_summary = NULL;
@@ -1788,7 +2202,22 @@ esp_err_t xigua_app_start(void)
     err = nvs_open(X_NVS_NAMESPACE, NVS_READWRITE, &s_nvs);
     if (err != ESP_OK) return err;
     s_nvs_open = true;
+    xigua_care_init(&s_care);
+    size_t care_size = sizeof(s_care);
+    if (nvs_get_blob(s_nvs, "care_v1", &s_care, &care_size) != ESP_OK ||
+        care_size != sizeof(s_care) || !xigua_care_valid(&s_care)) xigua_care_init(&s_care);
+    s_pending_edit.valid = false;
+    s_alert_id = s_alert_dismissed_id = 0;
+    s_cloud_loaded = false;
     state_load();
+    size_t cloud_size = sizeof(s_cloud);
+    if (nvs_get_blob(s_nvs, "cloud_sync", &s_cloud, &cloud_size) != ESP_OK ||
+        cloud_size != sizeof(s_cloud) || s_cloud.magic != XIGUA_CLOUD_MAGIC || !s_cloud.next_seq) {
+        xigua_cloud_init(&s_cloud, s_state.data.event_head, s_state.data.event_count);
+    }
+    memcpy(s_state.cloud_ids, s_cloud.ids, sizeof(s_state.cloud_ids));
+    s_cloud_loaded = true;
+    state_save();
     load_last_command_id();
     apply_timezone();
     s_state.battery_soc = bsp_battery_soc();
@@ -1804,12 +2233,16 @@ esp_err_t xigua_app_start(void)
         snprintf(s_feedback, sizeof(s_feedback), "Wi-Fi启动失败");
     }
     if (xigua_ai_start() != ESP_OK) snprintf(s_feedback, sizeof(s_feedback), "AI服务启动失败");
+    if (xigua_backend_start() != ESP_OK) ESP_LOGW(TAG, "cloud task unavailable");
     return ESP_OK;
 }
 
 esp_err_t xigua_app_stop(void)
 {
     s_running = false;
+    esp_err_t ble_stop=xigua_ble_shutdown();
+    if (ble_stop!=ESP_OK) return ble_stop;
+    xigua_backend_stop();
     xigua_ai_stop();
     xigua_wifi_stop();
     if (s_nvs_open) {
@@ -1899,6 +2332,60 @@ esp_err_t xigua_app_ai_response(const char *json)
 void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
     if (!s_running) return;
+    if (s_page == X_PAGE_HANDOFF) {
+        if (ev == BSP_BTN_LONG && btn == BSP_BTN_DOWN) {
+            xigua_ai_stop_voice(); go_page(X_PAGE_OVERVIEW, 8); ui_sync();
+        } else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
+            esp_err_t err = xigua_ai_read_reply(s_handoff_view);
+            snprintf(s_feedback, sizeof(s_feedback), "%s", err == ESP_OK ? "正在朗读交接" : "朗读未启动");
+            ui_sync();
+        } else if (ev == BSP_BTN_PRESS && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) && bsp_lvgl_lock(100)) {
+            lv_point_t size;
+            lv_text_get_size(&size, s_handoff_view, &xigua_font_full20, 0, 0, 204, LV_TEXT_FLAG_NONE);
+            size_t pages = x_ai_page_count((size_t)size.y, 190);
+            s_focus = xigua_menu_move(s_focus, pages, btn == BSP_BTN_DOWN);
+            ui_refresh_page(); bsp_lvgl_unlock();
+        }
+        return;
+    }
+    if (s_page == X_PAGE_CONFIRM_EDIT) {
+        if (ev == BSP_BTN_PRESS && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN)) s_focus = !s_focus;
+        else if ((ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) || (ev == BSP_BTN_LONG && btn == BSP_BTN_DOWN)) {
+            bool save = ev == BSP_BTN_CLICK && s_focus != 0;
+            esp_err_t err = confirm_feed_edit(save);
+            snprintf(s_feedback, sizeof(s_feedback), "%s", err != ESP_OK ? "记录已变化或保存失败" :
+                     save ? "修改已保存，5秒内可撤销" : "已取消修改");
+            go_page(X_PAGE_OVERVIEW, 0);
+        }
+        ui_sync(); return;
+    }
+    if (s_page == X_PAGE_REMINDER_ALERT) {
+        if (ev == BSP_BTN_PRESS && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN)) s_focus = !s_focus;
+        else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
+            esp_err_t err = finish_reminder(s_alert_id, s_focus != 0);
+            if (err == ESP_OK) go_page(s_alert_return_page, s_alert_return_focus);
+            snprintf(s_feedback, sizeof(s_feedback), "%s", err == ESP_OK ? "提醒已处理" : "提醒保存失败，请重试");
+        } else if (ev == BSP_BTN_LONG && btn == BSP_BTN_DOWN) {
+            s_alert_dismissed_id = s_alert_id;
+            go_page(s_alert_return_page, s_alert_return_focus);
+        }
+        ui_sync(); return;
+    }
+    if (s_page == X_PAGE_REMINDERS && ev != BSP_BTN_LONG) {
+        if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+        size_t count = 0;
+        uint32_t ids[XIGUA_REMINDER_CAPACITY];
+        for (size_t i = 0; i < XIGUA_REMINDER_CAPACITY; ++i)
+            if (s_care.items[i].id) ids[count++] = s_care.items[i].id;
+        xSemaphoreGive(s_mutex);
+        if (ev == BSP_BTN_PRESS && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN))
+            s_focus = xigua_menu_move(s_focus, count, btn == BSP_BTN_DOWN);
+        else if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK && s_focus < count) {
+            s_alert_id = ids[s_focus]; s_alert_return_page = X_PAGE_REMINDERS; s_alert_return_focus = 0;
+            go_page(X_PAGE_REMINDER_ALERT, 0);
+        }
+        ui_sync(); return;
+    }
     if (s_page == X_PAGE_TODAY && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) && ev != BSP_BTN_LONG) {
         if (ev == BSP_BTN_PRESS && s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
             size_t pages = sleep_page_count(&s_state.data) + feed_record_count(&s_state.data);
@@ -1927,13 +2414,33 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         else if (ev == BSP_BTN_LONG && btn == BSP_BTN_DOWN) input = X_AI_BACK;
         else return;
         if (!bsp_lvgl_lock(100)) return;
+        s_ai_ui.paused = xigua_ai_voice_phase() == XIGUA_AI_VOICE_PAUSED;
+        s_ai_ui.speaking = s_ai_ui.paused || xigua_ai_voice_phase() == XIGUA_AI_VOICE_SPEAKING;
         x_ai_effect_t effect = x_ai_input(&s_ai_ui, input);
         if (effect == X_AI_START_VOICE && !ai_request_voice_current_mode()) {
             snprintf(s_ai_error, sizeof(s_ai_error), "%s", s_feedback);
             x_ai_complete(&s_ai_ui, false);
         } else if (effect == X_AI_STOP_VOICE) xigua_ai_stop_voice();
+        else if (effect == X_AI_PAUSE_VOICE || effect == X_AI_RESUME_VOICE ||
+                 (effect == X_AI_RESTART_VOICE && s_ai_ui.speaking)) {
+            esp_err_t control_error = effect == X_AI_PAUSE_VOICE ? xigua_ai_pause_voice() :
+                                     effect == X_AI_RESUME_VOICE ? xigua_ai_resume_voice() :
+                                                                  xigua_ai_restart_voice();
+            s_ai_ui.paused = xigua_ai_voice_phase() == XIGUA_AI_VOICE_PAUSED;
+            s_ai_ui.speaking = s_ai_ui.paused || xigua_ai_voice_phase() == XIGUA_AI_VOICE_SPEAKING;
+            snprintf(s_ai_audio_status, sizeof(s_ai_audio_status), "%s",
+                     control_error != ESP_OK ? "朗读操作未完成" :
+                     s_ai_ui.paused ? "已暂停朗读" : "正在缓冲语音");
+        }
+        else if (effect == X_AI_READ_REPLY || effect == X_AI_RESTART_VOICE) {
+            esp_err_t read_error = xigua_ai_read_reply(s_ai_reply);
+            s_ai_ui.speaking = read_error == ESP_OK;
+            s_ai_ui.paused = false;
+            snprintf(s_ai_audio_status, sizeof(s_ai_audio_status), "%s",
+                     read_error == ESP_OK ? "正在朗读" : "朗读未启动，请重试");
+        }
         else if (effect == X_AI_HOME) {
-            if (s_ai_request_pending) xigua_ai_stop_voice();
+            if (s_ai_request_pending || s_ai_ui.speaking) xigua_ai_stop_voice();
             go_page(X_PAGE_OVERVIEW, 0);
         }
         if (input == X_AI_OK && s_ai_ui.view == X_AI_READY && s_ai_ui.focus == 1 &&
@@ -2004,7 +2511,7 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     }
     if (ev != BSP_BTN_CLICK) return;
 
-    if (btn == BSP_BTN_OK && s_page == X_PAGE_OVERVIEW && s_focus != 3 && undo_available()) {
+    if (btn == BSP_BTN_OK && s_page == X_PAGE_OVERVIEW && s_focus != HOME_SLEEP_INDEX && undo_available()) {
         if (undo_last()) ui_sync();
         return;
     }
@@ -2067,18 +2574,20 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             s_focus = btn == BSP_BTN_UP ? (s_focus + count - 1) % count : (s_focus + 1) % count;
         } else if (btn == BSP_BTN_OK) {
             if (s_focus == 0) go_page(X_PAGE_VOICE, 0);
-            else if (s_focus == 1) go_page(X_PAGE_RECORD, 0);
-            else if (s_focus == 2) go_page(X_PAGE_TODAY, 0);
-            else if (s_focus == 3) {
+            else if (s_focus == HOME_STORY_INDEX) go_page(X_PAGE_STORY, 0);
+            else if (s_focus == HOME_RECORD_INDEX) go_page(X_PAGE_RECORD, 0);
+            else if (s_focus == HOME_TODAY_INDEX) go_page(X_PAGE_TODAY, 0);
+            else if (s_focus == HOME_SLEEP_INDEX) {
                 toggle_sleep();
             }
-            else if (s_focus == 4) go_page(X_PAGE_SOUND, 0);
-            else if (s_focus == 5) {
+            else if (s_focus == HOME_SOUND_INDEX) { xigua_backend_refresh_catalog(); go_page(X_PAGE_SOUND, 0); }
+            else if (s_focus == 8) go_page(X_PAGE_HANDOFF, 0);
+            else if (s_focus == 9) go_page(X_PAGE_REMINDERS, 0);
+            else if (s_focus == 6) {
                 (void)xigua_wifi_start();
                 wifi_ui_enter_menu();
                 go_page(X_PAGE_WIFI, 0);
-            } else if (s_focus == 6) go_page(X_PAGE_SETTINGS, 0);
-            else go_page(X_PAGE_STORY, 0);
+            } else go_page(X_PAGE_SETTINGS, 0);
             ui_sync();
             return;
         }
@@ -2097,9 +2606,16 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             return;
         }
     } else if (s_page == X_PAGE_SOUND) {
-        if (btn == BSP_BTN_UP) s_focus = (s_focus + 2) % 3;
-        else if (btn == BSP_BTN_DOWN) s_focus = (s_focus + 1) % 3;
-        else if (btn == BSP_BTN_OK) snprintf(s_feedback, sizeof(s_feedback), "音频服务等待接入");
+        size_t count=xigua_backend_catalog_item(0,NULL,0,NULL);
+        if (s_focus>=count+3) s_focus=count+2;
+        if (btn == BSP_BTN_UP) s_focus = (s_focus + count + 2) % (count+3);
+        else if (btn == BSP_BTN_DOWN) s_focus = (s_focus + 1) % (count+3);
+        else if (btn == BSP_BTN_OK) {
+            if (s_focus == count) xigua_backend_toggle_pause();
+            else if (s_focus == count+1) xigua_backend_stop_sound();
+            else if (s_focus == count+2) xigua_backend_refresh_catalog();
+            else xigua_backend_play_track(s_focus);
+        }
     } else if (s_page == X_PAGE_SETTINGS) {
         const size_t count = 4;
         if (btn == BSP_BTN_UP) s_focus = (s_focus + count - 1) % count;
@@ -2134,13 +2650,20 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         }
     } else if (s_page == X_PAGE_WIFI) {
         if (s_wifi_ui_mode == X_WIFI_UI_MENU) {
-            const size_t item_count = 1;
+            const size_t item_count = 2;
             if (btn == BSP_BTN_UP) s_focus = (s_focus + item_count - 1) % item_count;
             else if (btn == BSP_BTN_DOWN) s_focus = (s_focus + 1) % item_count;
             else if (btn == BSP_BTN_OK) {
                 (void)xigua_wifi_start();
-                wifi_ui_start_scan();
+                if (s_focus==0) wifi_ui_start_scan();
+                else {
+                    esp_err_t err=xigua_ble_begin();
+                    if (err==ESP_OK) { s_wifi_ui_mode=X_WIFI_UI_BLE;s_feedback[0]=0; }
+                    else snprintf(s_feedback,sizeof(s_feedback),"蓝牙启动失败：%s",esp_err_to_name(err));
+                }
             }
+        } else if (s_wifi_ui_mode==X_WIFI_UI_BLE) {
+            if (btn==BSP_BTN_OK) wifi_ui_enter_menu();
         } else if (s_wifi_ui_mode == X_WIFI_UI_SCAN) {
             size_t count = xigua_wifi_scan_count();
             if (btn == BSP_BTN_UP && count > 0) {
@@ -2161,4 +2684,178 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         ui_refresh_page();
         bsp_lvgl_unlock();
     }
+}
+
+
+static void format_local_handoff(const x_state_t *snapshot, char *out, size_t capacity)
+{
+    int feed = -1, sleep = -1, diaper = -1;
+    for (size_t i = 0; i < snapshot->data.event_count; ++i) {
+        size_t slot = (snapshot->data.event_head + X_EVENT_CAPACITY - 1 - i) % X_EVENT_CAPACITY;
+        const x_event_t *e = &snapshot->data.events[slot];
+        if (e->type == X_EVENT_FEED && (feed < 0 || e->epoch > snapshot->data.events[feed].epoch)) feed = (int)slot;
+        if (e->type == X_EVENT_SLEEP && (sleep < 0 || e->epoch > snapshot->data.events[sleep].epoch)) sleep = (int)slot;
+        if ((e->type == X_EVENT_PEE || e->type == X_EVENT_POOP) &&
+            (diaper < 0 || e->epoch > snapshot->data.events[diaper].epoch)) diaper = (int)slot;
+    }
+    char now[20], feed_text[128] = "暂无喂养记录", sleep_text[160] = "暂无睡眠记录", diaper_text[64] = "暂无尿便记录";
+    if (feed >= 0) format_feed_record(snapshot, (size_t)feed, feed_text, sizeof(feed_text));
+    if (xigua_sleep_running(snapshot->data.sleep_end_epoch)) {
+        char start[20];
+        snprintf(sleep_text, sizeof(sleep_text), "睡眠进行中\n开始 %s",
+            format_sleep_time(snapshot->data.sleep_start_epoch, start, sizeof(start)));
+    } else if (sleep >= 0) format_sleep_record(snapshot, (size_t)sleep, sleep_text, sizeof(sleep_text));
+    if (diaper >= 0) {
+        char when[20];
+        snprintf(diaper_text, sizeof(diaper_text), "%s %s",
+            format_sleep_time(snapshot->data.events[diaper].epoch, when, sizeof(when)),
+            snapshot->data.events[diaper].type == X_EVENT_PEE ? "尿" : "便");
+    }
+    snprintf(out, capacity, "设备记录截至 %s\n最近喂养\n%s\n睡眠\n%s\n最近尿便\n%s\n%s",
+        format_sleep_time((int64_t)time(NULL), now, sizeof(now)), feed_text, sleep_text, diaper_text,
+        snapshot->data.event_count == X_EVENT_CAPACITY ? "本地仅保留最近32条" : "未记录不代表未发生");
+}
+
+char *xigua_app_ai_context(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return NULL;
+    cJSON *root = cJSON_CreateObject(), *recent = cJSON_CreateArray(), *reminders = cJSON_CreateArray();
+    if (!root || !recent || !reminders) {
+        cJSON_Delete(root); cJSON_Delete(recent); cJSON_Delete(reminders);
+        xSemaphoreGive(s_mutex); return NULL;
+    }
+    cJSON_AddItemToObject(root, "recent_records", recent);
+    cJSON_AddItemToObject(root, "reminders", reminders);
+    int64_t now = (int64_t)time(NULL);
+    time_t raw = (time_t)now;
+    struct tm today;
+    char date[32] = "时间未校准";
+    int64_t midnight = 0;
+    if (now >= X_MIN_VALID_EPOCH && localtime_r(&raw, &today)) {
+        strftime(date, sizeof(date), "%Y-%m-%d %H:%M", &today);
+        today.tm_hour = today.tm_min = today.tm_sec = 0; today.tm_isdst = -1;
+        midnight = (int64_t)mktime(&today);
+    }
+    cJSON_AddStringToObject(root, "current_local_time", date);
+    cJSON_AddBoolToObject(root, "time_known", midnight != 0);
+    cJSON_AddStringToObject(root, "device_timezone", TIMEZONE_NAMES[s_state.data.timezone_index]);
+    cJSON_AddBoolToObject(root, "ring_full", s_state.data.event_count == X_EVENT_CAPACITY);
+    cJSON_AddNumberToObject(root, "local_revision", (double)s_cloud.revision);
+    uint32_t milk = 0, feeds = 0, diapers = 0, untimed = 0;
+    uint64_t sleep_seconds = 0;
+    static const char *types[] = { "", "feeding", "pee", "poop", "sleep", "bath", "tummy", "timer" };
+    for (size_t i = 0; i < s_state.data.event_count; ++i) {
+        size_t slot = (s_state.data.event_head + X_EVENT_CAPACITY - 1 - i) % X_EVENT_CAPACITY;
+        const x_event_t *e = &s_state.data.events[slot];
+        if (e->epoch < X_MIN_VALID_EPOCH) ++untimed;
+        if (midnight && e->epoch >= midnight && e->epoch <= now) {
+            if (e->type == X_EVENT_FEED) { milk += e->amount; ++feeds; }
+            if (e->type == X_EVENT_PEE || e->type == X_EVENT_POOP) ++diapers;
+        }
+        if (midnight && e->type == X_EVENT_SLEEP && !e->ingredient && e->epoch >= X_MIN_VALID_EPOCH) {
+            int64_t end = e->epoch < now ? e->epoch : now;
+            int64_t start = s_state.sleep_times.entries[slot].start_epoch;
+            if (start < X_MIN_VALID_EPOCH) start = e->epoch - (int64_t)e->duration_min * 60;
+            if (start < midnight) start = midnight;
+            if (end > start) sleep_seconds += (uint64_t)(end - start);
+        }
+        if (i < 8 && e->type < sizeof(types) / sizeof(types[0])) {
+            cJSON *item = cJSON_CreateObject();
+            if (!item) continue;
+            char when[32] = "unknown";
+            time_t event_raw = (time_t)e->epoch;
+            struct tm local;
+            if (e->epoch >= X_MIN_VALID_EPOCH && localtime_r(&event_raw, &local))
+                strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &local);
+            cJSON_AddStringToObject(item, "type", types[e->type]);
+            cJSON_AddStringToObject(item, "time", when);
+            cJSON_AddNumberToObject(item, "amount_ml", e->amount);
+            cJSON_AddNumberToObject(item, "duration_min", e->duration_min);
+            cJSON_AddItemToArray(recent, item);
+        }
+    }
+    cJSON_AddNumberToObject(root, "today_local_milk_ml", milk);
+    cJSON_AddNumberToObject(root, "today_local_feeding_count", feeds);
+    cJSON_AddNumberToObject(root, "today_local_diaper_count", diapers);
+    cJSON_AddNumberToObject(root, "today_local_completed_sleep_min", (double)sleep_seconds / 60);
+    cJSON_AddNumberToObject(root, "local_untimed_records", untimed);
+    uint16_t minutes = 0;
+    bool sleeping = xigua_sleep_running(s_state.data.sleep_end_epoch);
+    cJSON_AddBoolToObject(root, "sleep_running", sleeping);
+    if (sleeping && xigua_sleep_duration(s_state.sleep_time_known, s_state.sleep_started_us,
+        esp_timer_get_time(), s_state.data.sleep_start_epoch, now, &minutes))
+        cJSON_AddNumberToObject(root, "ongoing_sleep_min", minutes);
+    char *local_summary = malloc(768);
+    if (local_summary) {
+        format_local_handoff(&s_state, local_summary, 768);
+        cJSON_AddStringToObject(root, "latest_local_summary", local_summary); free(local_summary);
+    }
+    for (size_t i = 0; i < XIGUA_REMINDER_CAPACITY; ++i) if (s_care.items[i].id) {
+        cJSON *r = cJSON_CreateObject();
+        if (!r) continue;
+        char when[20];
+        cJSON_AddNumberToObject(r, "id", s_care.items[i].id);
+        cJSON_AddStringToObject(r, "title", s_care.items[i].title);
+        cJSON_AddStringToObject(r, "due", format_sleep_time(s_care.items[i].due_epoch, when, sizeof(when)));
+        cJSON_AddItemToArray(reminders, r);
+    }
+    xSemaphoreGive(s_mutex);
+    char *cloud = malloc(3072);
+    uint64_t revision = 0;
+    if (cloud && xigua_backend_care_context(cloud, 3072, &revision)) {
+        cJSON_AddStringToObject(root, "cloud_cache", cloud);
+        cJSON_AddNumberToObject(root, "cloud_revision", (double)revision);
+    } else cJSON_AddStringToObject(root, "cloud_cache", "暂无云端数据，不能推断完整历史");
+    free(cloud);
+    char *result = cJSON_PrintUnformatted(root); cJSON_Delete(root);
+    return result;
+}
+
+char *xigua_app_cloud_snapshot(void)
+{
+    if (!s_mutex || !s_cloud_loaded || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return NULL;
+    if (esp_timer_get_time() - s_cloud_changed_us < X_UNDO_WINDOW_US + 1000000LL) {
+        xSemaphoreGive(s_mutex); return NULL;
+    }
+    /* Allocate outside LVGL. Only a bounded 32-record ring is serialized. */
+    cJSON *root = cJSON_CreateObject(), *events = cJSON_CreateArray();
+    if (!root || !events) { cJSON_Delete(root); cJSON_Delete(events); xSemaphoreGive(s_mutex); return NULL; }
+    cJSON_AddStringToObject(root, "schema", "xigua-device-snapshot-v1");
+    cJSON_AddStringToObject(root, "firmware", "xigua-cloud-1");
+    cJSON_AddNumberToObject(root, "revision", (double)s_cloud.revision);
+    memcpy(s_cloud.ids, s_state.cloud_ids, sizeof(s_cloud.ids));
+    cJSON_AddNumberToObject(root, "floor", (double)xigua_cloud_floor(&s_cloud,s_state.data.event_head,s_state.data.event_count));
+    cJSON_AddNumberToObject(root, "sleeping_since", xigua_sleep_running(s_state.data.sleep_end_epoch) &&
+                            s_state.data.sleep_start_epoch >= X_MIN_VALID_EPOCH ? (double)s_state.data.sleep_start_epoch : 0);
+    cJSON_AddItemToObject(root, "events", events);
+    static const char *types[] = { "", "feeding", "diaper", "diaper", "sleep", "bath", "tummy", "timer" };
+    static const char *ingredients[] = { "formula", "breast_milk", "solid_food", "other" };
+    for (size_t i = 0; i < s_state.data.event_count; ++i) {
+        size_t slot = (s_state.data.event_head + X_EVENT_CAPACITY - s_state.data.event_count + i) % X_EVENT_CAPACITY;
+        const x_event_t *event = &s_state.data.events[slot];
+        if (!event->type || event->type >= sizeof(types)/sizeof(types[0]) || !s_state.cloud_ids[slot]) continue;
+        cJSON *item = cJSON_CreateObject();
+        if (!item) { cJSON_Delete(root); xSemaphoreGive(s_mutex); return NULL; }
+        cJSON_AddNumberToObject(item,"seq",(double)s_state.cloud_ids[slot]);
+        cJSON_AddStringToObject(item,"type",types[event->type]);
+        cJSON_AddNumberToObject(item,"epoch",event->epoch>=X_MIN_VALID_EPOCH?(double)event->epoch:0);
+        if (event->type == X_EVENT_FEED) {
+            cJSON_AddNumberToObject(item,"amount_ml",event->amount);
+            cJSON_AddStringToObject(item,"ingredient",ingredients[event->ingredient<4?event->ingredient:3]);
+        } else if (event->type == X_EVENT_PEE || event->type == X_EVENT_POOP) {
+            cJSON_AddStringToObject(item,"diaper_kind",event->type==X_EVENT_PEE?"pee":"poop");
+        } else {
+            cJSON_AddNumberToObject(item,"duration_min",event->duration_min);
+            if (event->type == X_EVENT_SLEEP) {
+                cJSON_AddBoolToObject(item,"duration_known",event->ingredient==0);
+                cJSON_AddNumberToObject(item,"start_epoch",(double)s_state.sleep_times.entries[slot].start_epoch);
+                cJSON_AddNumberToObject(item,"end_epoch",(double)s_state.sleep_times.entries[slot].end_epoch);
+            }
+        }
+        cJSON_AddItemToArray(events,item);
+    }
+    xSemaphoreGive(s_mutex);
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return payload;
 }

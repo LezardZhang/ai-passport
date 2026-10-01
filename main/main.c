@@ -57,7 +57,11 @@ void app_main(void)
         ESP_LOGE(TAG, "input queue allocation failed");
         return;
     }
-    if (xTaskCreate(input_task, "xigua_input", 4096, NULL, 5, NULL) != pdPASS) {
+    /* Page actions call into LVGL layout and text measurement. A 4 KiB task
+     * stack was enough for the old menu, but overflows when the AI/story view
+     * is rebuilt after a button event. Keep input callbacks responsive while
+     * giving those synchronous UI calls a bounded stack budget. */
+    if (xTaskCreate(input_task, "xigua_input", 8192, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "input task creation failed");
         return;
     }

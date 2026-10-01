@@ -7,11 +7,11 @@ import os
 import secrets
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import quote
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.staticfiles import StaticFiles
@@ -32,7 +32,7 @@ SESSION_SECRET = os.getenv("CHILDCARE_SESSION_SECRET", ADMIN_PASSWORD or API_TOK
 SESSION_COOKIE_SECURE = os.getenv("CHILDCARE_SESSION_COOKIE_SECURE", "1") != "0"
 
 EVENT_TYPES = ("feeding", "diaper", "sleep", "bath", "tummy", "timer")
-AUDIO_CATEGORIES = ("song", "white_noise", "story", "other")
+AUDIO_CATEGORIES = ("song", "white_noise", "story", "classical", "other")
 
 
 def utc_now() -> str:
@@ -98,7 +98,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS audio_tracks (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
-                category TEXT NOT NULL CHECK(category IN ('song','white_noise','story','other')),
+                category TEXT NOT NULL CHECK(category IN ('song','white_noise','story','classical','other')),
                 file_name TEXT,
                 play_url TEXT,
                 mime_type TEXT NOT NULL DEFAULT 'audio/mpeg',
@@ -121,6 +121,35 @@ def init_db() -> None:
             );
             """
         )
+        migrate_audio_categories(db)
+
+
+def migrate_audio_categories(db: sqlite3.Connection) -> None:
+    """Replace the old CHECK atomically while preserving referenced track IDs."""
+    schema = db.execute("SELECT sql FROM sqlite_master WHERE name='audio_tracks'").fetchone()[0]
+    if "'classical'" in schema:
+        return
+    # PRAGMA must precede BEGIN; playback history still references audio_tracks.
+    db.execute("PRAGMA foreign_keys = OFF")
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        replacement = schema.replace("audio_tracks", "audio_tracks_new", 1).replace(
+            "'story','other'", "'story','classical','other'")
+        if replacement == schema or "'classical'" not in replacement:
+            raise RuntimeError("unsupported audio category schema")
+        db.execute(replacement)
+        db.execute("INSERT INTO audio_tracks_new SELECT * FROM audio_tracks")
+        db.execute("DROP TABLE audio_tracks")
+        db.execute("ALTER TABLE audio_tracks_new RENAME TO audio_tracks")
+        db.execute("CREATE INDEX audio_tracks_category ON audio_tracks(category, active, title)")
+        if db.execute("PRAGMA foreign_key_check").fetchall():
+            raise RuntimeError("audio category migration would break references")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.execute("PRAGMA foreign_keys = ON")
 
 
 class ChildIn(BaseModel):
@@ -129,6 +158,16 @@ class ChildIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     birth_date: str | None = None
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
+
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("timezone must be a valid IANA timezone") from exc
+        return value
 
 
 class DeviceIn(BaseModel):
@@ -181,7 +220,7 @@ class TrackIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str | None = Field(default=None, max_length=128)
     title: str = Field(min_length=1, max_length=120)
-    category: Literal["song", "white_noise", "story", "other"]
+    category: Literal["song", "white_noise", "story", "classical", "other"]
     file_name: str | None = Field(default=None, max_length=240)
     play_url: str | None = Field(default=None, max_length=1000)
     mime_type: str = Field(default="audio/mpeg", max_length=80)
@@ -200,16 +239,17 @@ class PlaybackIn(BaseModel):
 
 app = FastAPI(title="Xigua Childcare API", version="0.1.0")
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
+
 
 
 @app.get("/admin/login")
-def admin_login_page() -> Response:
+def admin_login_page(request: Request) -> Response:
     return Response(
         """<!doctype html><meta charset='utf-8'><title>西瓜育儿登录</title>
         <style>body{font-family:system-ui;max-width:360px;margin:15vh auto;padding:24px}input,button{box-sizing:border-box;width:100%;padding:10px;margin:6px 0}button{background:#0b7285;color:white;border:0;border-radius:6px}</style>
         <h1>西瓜育儿管理台</h1><form id='f'><input id='p' type='password' placeholder='管理密码' autofocus><button>登录</button></form><p id='m'></p>
-        <script>f.onsubmit=async e=>{e.preventDefault();let r=await fetch('/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p.value})});if(r.ok)location='/admin';else m.textContent=(await r.json()).detail}</script>""",
+        <script>const BASE=__CHILDCARE_BASE_JSON__;f.onsubmit=async e=>{e.preventDefault();let r=await fetch(BASE+'/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p.value})});if(r.ok)location=BASE+'/admin';else m.textContent=(await r.json()).detail}</script>"""
+        .replace("__CHILDCARE_BASE_JSON__", json.dumps(request.scope.get("root_path", ""))),
         media_type="text/html; charset=utf-8",
     )
 
@@ -219,7 +259,7 @@ class LoginIn(BaseModel):
 
 
 @app.post("/admin/login")
-def admin_login(payload: LoginIn, response: Response) -> dict[str, bool]:
+def admin_login(payload: LoginIn, response: Response, request: Request) -> dict[str, bool]:
     if not ADMIN_PASSWORD and any((API_TOKEN, DEVICE_TOKEN, ADMIN_TOKEN, HERMES_TOKEN, PUBLIC_READ_TOKEN)):
         raise HTTPException(status_code=503, detail="CHILDCARE_ADMIN_PASSWORD must be configured")
     if ADMIN_PASSWORD and not hmac.compare_digest(payload.password, ADMIN_PASSWORD):
@@ -227,13 +267,14 @@ def admin_login(payload: LoginIn, response: Response) -> dict[str, bool]:
     response.set_cookie(
         "childcare_admin_session", session_value(), httponly=True, samesite="lax",
         secure=SESSION_COOKIE_SECURE, max_age=12 * 3600,
+        path=request.scope.get("root_path", "") or "/",
     )
     return {"ok": True}
 
 
 @app.post("/admin/logout")
-def admin_logout(response: Response) -> dict[str, bool]:
-    response.delete_cookie("childcare_admin_session")
+def admin_logout(response: Response, request: Request) -> dict[str, bool]:
+    response.delete_cookie("childcare_admin_session", path=request.scope.get("root_path", "") or "/")
     return {"ok": True}
 
 
@@ -241,6 +282,7 @@ def admin_logout(response: Response) -> dict[str, bool]:
 def admin_page(request: Request) -> Response:
     require_admin_session(request)
     html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    html = html.replace("__CHILDCARE_BASE_JSON__", json.dumps(request.scope.get("root_path", "")))
     return Response(html, media_type="text/html; charset=utf-8")
 
 
@@ -271,6 +313,8 @@ def admin_devices(request: Request) -> dict:
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    from .personal import initialize
+    initialize()
 
 
 def authorize(
@@ -366,6 +410,9 @@ def row_dict(row: sqlite3.Row) -> dict:
 def track_dict(row: sqlite3.Row) -> dict:
     data = row_dict(row)
     data["active"] = bool(data["active"])
+    with get_db() as db:
+        source=db.execute('SELECT source_url,creator,license,license_url,changes FROM audio_sources WHERE track_id=?',(data['id'],)).fetchone()
+    if source: data['attribution']=dict(source)
     if not data.get("play_url") and data.get("file_name"):
         base = PUBLIC_BASE_URL or ""
         data["play_url"] = f"{base}/media/{quote(data['file_name'])}"
@@ -422,6 +469,9 @@ def ingest_events(child_id: str, device_id: Annotated[str, Header(alias="X-Devic
             raise HTTPException(status_code=404, detail="child not found")
         require_device(db, device_id, child_id)
         for event in payload.events:
+            if db.execute("SELECT 1 FROM deleted_records WHERE child_id=? AND client_event_id=?",(child_id,event.id)).fetchone():
+                duplicates += 1
+                continue
             cursor = db.execute(
                 """INSERT OR IGNORE INTO events
                 (id,client_event_id,child_id,device_id,type,occurred_at,amount_ml,ingredient,
@@ -479,11 +529,14 @@ def summary(child_id: str, day: str | None = Query(default=None, pattern=r"^\d{4
         child = db.execute("SELECT timezone FROM children WHERE id=?", (child_id,)).fetchone()
         if not child:
             raise HTTPException(status_code=404, detail="child not found")
-        if not day:
-            try:
-                day = datetime.now(ZoneInfo(child["timezone"])).date().isoformat()
-            except Exception:
-                day = datetime.now(timezone.utc).date().isoformat()
+        try:
+            zone = ZoneInfo(child["timezone"])
+            local_day = date.fromisoformat(day) if day else datetime.now(zone).date()
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise HTTPException(status_code=400, detail="invalid day or child timezone") from exc
+        day = local_day.isoformat()
+        start = iso(datetime.combine(local_day, time.min, zone))
+        end = iso(datetime.combine(local_day + timedelta(days=1), time.min, zone))
         row = db.execute(
             """SELECT COUNT(*) AS total_events,
               COALESCE(SUM(CASE WHEN type='feeding' THEN 1 ELSE 0 END),0) AS feeding_count,
@@ -493,8 +546,8 @@ def summary(child_id: str, day: str | None = Query(default=None, pattern=r"^\d{4
               COALESCE(SUM(CASE WHEN type='sleep' THEN duration_min ELSE 0 END),0) AS sleep_minutes,
               COALESCE(SUM(CASE WHEN type='bath' THEN 1 ELSE 0 END),0) AS bath_count,
               COALESCE(SUM(CASE WHEN type='tummy' THEN 1 ELSE 0 END),0) AS tummy_count
-            FROM events WHERE child_id=? AND substr(occurred_at,1,10)=?""",
-            (child_id, day),
+            FROM events WHERE child_id=? AND occurred_at>=? AND occurred_at<?""",
+            (child_id, start, end),
         ).fetchone()
     return {"child_id": child_id, "day": day, **row_dict(row)}
 
@@ -521,7 +574,7 @@ def create_track(payload: TrackIn) -> dict:
     return track_dict(row)
 
 
-@app.get("/v1/audio/tracks", dependencies=[Depends(authorize_roles("external"))])
+@app.get("/v1/audio/tracks", dependencies=[Depends(authorize_roles("external", "device"))])
 def list_tracks(category: str | None = Query(default=None)) -> dict:
     if category and category not in AUDIO_CATEGORIES:
         raise HTTPException(status_code=400, detail="unsupported audio category")
@@ -531,6 +584,24 @@ def list_tracks(category: str | None = Query(default=None)) -> dict:
             (category,) if category else (),
         ).fetchall()
     return {"items": [track_dict(row) for row in rows], "count": len(rows)}
+
+
+@app.get("/v1/audio/catalog", dependencies=[Depends(authorize_roles("external", "device"))])
+def device_catalog(category: str, offset: int = Query(default=0, ge=0),
+                   limit: int = Query(default=8, ge=1, le=16)) -> dict:
+    """Small pages of device-compatible media, without the web attribution body."""
+    if category not in AUDIO_CATEGORIES:
+        raise HTTPException(status_code=400, detail="unsupported audio category")
+    predicate = "active=1 AND category=? AND mime_type='audio/wav' AND file_name IS NOT NULL"
+    with get_db() as db:
+        total = db.execute("SELECT COUNT(*) FROM audio_tracks WHERE " + predicate, (category,)).fetchone()[0]
+        rows = db.execute("SELECT id,title,category,file_name,play_url,mime_type FROM audio_tracks WHERE " +
+                          predicate + " ORDER BY title,id LIMIT ? OFFSET ?", (category, limit, offset)).fetchall()
+    items = [{"id": row["id"], "title": row["title"], "category": row["category"],
+              "mime_type": row["mime_type"],
+              "play_url": row["play_url"] or f"{PUBLIC_BASE_URL}/media/{quote(row['file_name'])}"} for row in rows]
+    return {"items": items, "count": len(items), "total": total, "offset": offset,
+            "next_offset": offset + len(items) if offset + len(items) < total else None}
 
 
 @app.post("/v1/devices/{device_id}/audio/{track_id}/playback", dependencies=[Depends(authorize_roles("device"))])
@@ -550,7 +621,7 @@ def record_playback(device_id: str, track_id: str, payload: PlaybackIn) -> dict:
     return {"accepted": True, "server_time": now}
 
 
-@app.get("/v1/audio/tracks/{track_id}", dependencies=[Depends(authorize_roles("external"))])
+@app.get("/v1/audio/tracks/{track_id}", dependencies=[Depends(authorize_roles("external", "device"))])
 def get_track(track_id: str) -> dict:
     with get_db() as db:
         row = db.execute("SELECT * FROM audio_tracks WHERE id=? AND active=1", (track_id,)).fetchone()
@@ -655,3 +726,35 @@ def file_sha256(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+@app.get("/admin/api/skills/{role}", dependencies=[Depends(authorize_roles("admin"))])
+def download_childcare_skill(role: Literal["hermes", "public", "device"]) -> Response:
+    from .skill_bundle import build_bundle
+    from .personal import ids
+    child_id, device_id = ids()
+    try:
+        bundle = build_bundle(role, PUBLIC_BASE_URL, {
+            "hermes": HERMES_TOKEN, "public": PUBLIC_READ_TOKEN, "device": DEVICE_TOKEN,
+        }[role], child_id, device_id)
+    except ValueError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return Response(bundle, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="childcare-{role}.zip"',
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    })
+
+
+from .personal import router as personal_router
+app.include_router(personal_router)
+from .care import router as care_router
+app.include_router(care_router)
+
+
+@app.get("/media/{file_name:path}", dependencies=[Depends(authorize_roles("admin", "device", "external"))])
+def protected_media(file_name: str):
+    from fastapi.responses import FileResponse
+    path = (MEDIA_DIR / file_name).resolve()
+    if not path.is_relative_to(MEDIA_DIR.resolve()) or not path.is_file():
+        raise HTTPException(404, "audio file not found")
+    return FileResponse(path)

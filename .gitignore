@@ -17,3 +17,4 @@ managed_components/
 quota_config_local.h
 xigua_wifi_credentials_local.h
 xigua_ai_credentials_local.h
+xigua_backend_config_local.h

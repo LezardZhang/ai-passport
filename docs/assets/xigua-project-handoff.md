@@ -312,3 +312,203 @@ The repository now contains a Docker-deployable backend under `backend/`. It sto
 The service includes a browser management console at `/admin`, device upload and playback-reporting endpoints, child summaries and event queries, an audio catalogue for songs/stories/white noise, and a stable `/v1/hermes/children/{child_id}/analysis-input` export. Hermes has a separate token and can upload bounded audio files and add catalogue metadata, but cannot write childcare events. Device, admin, Hermes, and public-read credentials are separate environment variables. `backend/docker-compose.yml` persists the database and media in a named Docker volume.
 
 Backend host tests pass (`python -m pytest -q backend/tests/test_api.py`, 4 tests). Docker image build and Tencent Cloud deployment are not run on this Windows host because Docker is unavailable and the Edge Tencent Cloud session was not exposed to the automation bridge; server address, domain, HTTPS proxy, and final environment values remain deployment inputs.
+
+## Record context, handoff, corrections and reminders (2026-10-01)
+
+The owner selected record-aware voice questions, caregiver handoff, voice backfill
+and corrections, and parent-set reminders. These now extend the existing Xigua
+application. Ordinary questions receive bounded local records, local-day totals,
+ongoing sleep and reminders. The cached server context adds a seven-day summary,
+its revision, timezone and synchronization timestamp without adding cloud and
+local totals together. Handoff has its own paged reader and optional speech.
+The browser handoff page persists a parent note of at most 160 characters.
+
+Backfill validates exact local dates and handles sleep across midnight. Editing
+is limited to the most recently saved feeding: show before/after values, default
+to Cancel, and require explicit Save. Confirmation preserves its event sequence
+and syncs the correction without duplication. Eight one-shot reminders persist
+under a separate `care_v1` NVS key; due items display a popup, play a short offline
+tone when audio is free, and support completion or a ten-minute snooze. Reminders
+wait for a trustworthy clock after reboot. The existing partitions and record
+layout remain unchanged. Detailed controls and limits are in
+[the application design](xigua-ui-design.md#10-record-context-handoff-corrections-and-reminders-2026-10-01).
+
+Build: PASS. The complete `./tools/validate.sh` gate passed with ESP-IDF 5.5.3.
+Host tests: PASS, including the real application transaction/context functions,
+pure date/reminder logic, reply speech controls and Chinese glyph coverage.
+The backend suite passed all 24 tests. The browser handoff page was exercised
+with a temporary database; saving and reloading a synthetic parent note passed.
+
+Source/configuration checkpoint: `0000106ca568a0d50553705a5101d8f1c13c7ef7`,
+stored at `refs/codex/checkpoints/xigua-care-453b5eef7b59` without moving the
+working branch or changing its index. Verified archive:
+`build/firmware/453b5eef7b59d1b508726e0b399e4e0e0b4f4b0a0ab2f5b2ac1fb45cff801acc/`.
+Full-image SHA-256:
+`453b5eef7b59d1b508726e0b399e4e0e0b4f4b0a0ab2f5b2ac1fb45cff801acc`.
+Matching ELF SHA-256:
+`9ecac07d7ccd24312da0251601cda679a9e012d1d25e6dab42d0da9571d28ee0`.
+Application: 5,812,400 bytes; factory free: 413,520 bytes.
+
+Device tests: PASS for segmented flashing, write hashes and the observed startup
+window only. The identified ESP32-C3 has MAC `4c:11:ae:31:0e:3c`, attached at
+`/dev/cu.usbmodem11101`. Bootloader, unchanged partition table and application
+were written at `0x0`, `0x8000` and `0x10000`, leaving NVS and voice data outside
+the write ranges. A 45-second serial observation matched ELF prefix
+`9ecac07d7`, connected Wi-Fi, and passed public HTTPS and MiMo text checks with
+HTTP 200 / `ESP_OK`. TLS internal heap was 76,996 bytes free with a 65,536-byte
+largest block. No panic or fault appeared in this window; raw logs remain local.
+
+Unverified: physical record questions, backfill and correction confirmation,
+handoff paging and speech, reminder sound/snooze/reboot, and long-run heap use.
+The updated backend is deployed; cloud parent notes and seven-day context are
+available alongside the device-local functions. The packaged backend source is
+`build/xigua-care-backend.tar.gz`, SHA-256
+`293eaf91365bff9f337ecb8bd4bfa6033b5f3f9abb25057e3781dda0e83dd6c0`.
+
+After explicit owner authorization, production deployment passed on the existing
+server under `/home/clouddata/releases/personal-services-20261001-care`.
+The transferred archive hash matched; the source comparison differed only in
+`app/care.py`, `app/main.py`, `app/personal.py` and `web/console.html`.
+Only `cockpit-cloud-cloud-backup-1` was rebuilt; other container identities stayed
+unchanged. Image tag: `personal-services:20261001-134058`; image SHA-256:
+`8b53dd8e9ddeb9a3a09e503b3a625f874552a149eb8ad328c582d304d2ecf53f`.
+
+The consistent full backup is 4,549,537,564 bytes, SHA-256
+`bc9986884d51ed08cd2e2137ef1f6e4b6692e8bd2a44d712df88e15f0c228c25`.
+Archive objects, original backup metadata/inventories and childcare SQLite
+integrity passed verification. Existing child/settings, ten audio tracks and
+their sources, and five deleted-record rows were retained. No active server
+event rows existed before or after this upgrade.
+
+The deployed source matches the release. `/readyz`, authenticated care/context
+reads, role boundaries and the 160-character note limit passed. The firmware's
+existing device credential also read the new context through the public proxy;
+the response was 1,091 bytes with revision 18. Browser login and the live handoff
+page passed; device connectivity continued after cutover. These HTTP/browser
+checks do not establish physical voice or reminder acceptance.
+
+Private checkpoints, `verification-report.json`, the previous image and
+`rollback.sh` remain in the release directory. To restore the previous service
+image while keeping the existing data, run
+`sh /home/clouddata/releases/personal-services-20261001-care/rollback.sh` on the
+server. A local copy of the report is
+`build/xigua-care-cloud-verification.json`.
+
+## Persistent time/network status bar (2026-10-01)
+
+Every application page now has a separate row for local `HH:MM`, Wi-Fi/probe
+state and battery, with the page title below. The one-second timer updates idle
+pages and reply readers. Uncalibrated time is `--:--`, unavailable battery is
+`--%`, and an IP connection is distinguished from public HTTPS probe success.
+Model failure alone does not mark the network as failed. Content, keyboard and
+pagination bounds remain unchanged.
+
+Build: PASS, complete `./tools/validate.sh` with ESP-IDF 5.5.3.
+Host tests: PASS, real header refresh, clock/timezone and network transitions,
+unavailable battery, and coverage/width in the selected 16 px font.
+Local source/configuration checkpoint: `b51ad8f0cdc8124cb6c10c470921081ac3907b92`,
+ref `refs/codex/checkpoints/xigua-status-ec1d729d8ff5`; branch and index preserved.
+Verified matching BIN/ELF/MAP archive:
+`build/firmware/ec1d729d8ff5505efcb06427ac607c0c069a790abbf22e111148f2a59edb6362/`.
+Full-image SHA-256:
+`ec1d729d8ff5505efcb06427ac607c0c069a790abbf22e111148f2a59edb6362`.
+ELF SHA-256:
+`2e9696a8ad3a399fd283ebafd2954401934e78bde1b99b42f0ba74e2fa4b3930`.
+Application: 5,813,200 bytes; factory free: 412,720 bytes.
+
+Device tests: PASS for the identified ESP32-C3, segmented writes at `0x0`,
+`0x8000` and `0x10000`, all write hashes, and a 45-second startup window.
+The partition-table hash matches the previous care build; NVS and recording
+ranges were not written. The observed ELF matched; Wi-Fi connected, public HTTPS
+and MiMo text checks returned 200 / `ESP_OK`, with no panic/fault observed.
+TLS internal heap was 77,104 bytes free, largest block 65,536 bytes. The monitor
+is closed; the private raw log and sanitized report remain under `build/`.
+
+Unverified: physical header readability, corner clipping, time display and
+changing network labels across pages. NFC writing and phone BLE configuration
+are not implemented. Their proposed flow, platform/HTTPS inputs and radio-budget
+requirements are recorded in
+[the application design](xigua-ui-design.md#11-persistent-status-bar-and-proposed-phone-configuration-2026-10-01).
+
+## Phone login and complete admin Key (2026-10-01)
+
+The login field now uses visible text, disables automatic capitalization and
+correction, and trims surrounding whitespace on submission. The prior login
+failure came from supplying a Key missing its final three characters after
+reading wrapped editor text. The original 64-character runtime Key passed
+authentication; the truncated value returned 401. Credential values are omitted.
+
+Production login update: `/home/clouddata/releases/personal-services-20261001-login-v2`.
+Image: `personal-services:login-20261001-152315`; SHA-256:
+`456cdc13f8bb639663c0cb9fa10e63d5ff95c07a35175abd067d107983d2f52f`.
+Only the login HTML changed in the image. Runtime environment, data mounts and
+other containers were verified unchanged. The previous image and HTML remain
+available; rollback command:
+`sh /home/clouddata/releases/personal-services-20261001-login-v2/rollback.sh`.
+
+Build: PASS, complete gate. Host tests: PASS, repository tests and 24 backend
+tests. Public browser login: PASS with the complete Key and surrounding spaces.
+Device tests: NOT RUN for this web-only change. Unverified: actual iPhone and
+Android keyboard/paste behavior. No firmware update was required.
+
+## Android BLE Wi-Fi provisioning and HTTPS (2026-10-02)
+
+Implemented the Android phone workflow with matching firmware and console:
+device **Wi-Fi provisioning → Phone Bluetooth provisioning**, five-minute
+window, fresh six-digit on-device pairing PIN, authenticated/encrypted GATT,
+nearby-network scan, manual SSID/password, built-in profile selection without
+password disclosure, and IP/persistence result. New credentials persist only
+after a successful join. AI and cloud networking wait while BLE is active;
+completion, device-page exit or timeout stops BLE and resumes normal work.
+See [the application design](xigua-ui-design.md#12-android-ble-provisioning-2026-10-02).
+API-key/model editing, multiple saved profile editing and iPhone remain pending.
+
+Production phone URL: `https://162.14.108.234/cloud-backup/console#phone`.
+The old HTTP NFC login redirects to this HTTPS origin. Existing Let's Encrypt
+IP certificate validation passed, and its existing 1Panel auto-renew switch is
+enabled. A scoped OpenResty route uses the application's new loopback-only
+`127.0.0.1:32071` listener; trusted private proxy headers preserve HTTPS scheme
+and same-origin CSRF checks. Device/backup HTTP protocols are unchanged.
+Only the backup application container was recreated; credentials, data mounts,
+other container IDs and the original Docforge server configuration were checked.
+
+Deployment: `/home/clouddata/releases/personal-services-20261002-ble`.
+Image: `personal-services:ble-20261002`, SHA-256
+`7e21d0718745864dd884f786fb48a8bf5c78c8fc49ae1b807b92d64d6062b32f`.
+Both databases have local SQLite checkpoints. The prior image, private Compose
+settings and guarded proxy cleanup remain available. Web rollback:
+`sh /home/clouddata/releases/personal-services-20261002-ble/rollback.sh`.
+
+Build: PASS, complete gate plus merged/debug archive verification.
+Host tests: PASS, repository tests, 26 backend tests and the actual JavaScript
+client's framing/ACK/disconnect tests. Browser checks: PASS for old-URL HTTPS
+redirect, login, authenticated script, same-origin logout and 390 px layout.
+
+Final source checkpoint: `25588a74b541bb23c87a56f11bdcbcec4d527695`;
+ref `refs/codex/checkpoints/xigua-ble-dad6e022e219`, branch/index preserved.
+Matching BIN/ELF/MAP archive:
+`build/firmware/dad6e022e219d71a423733940500127208df02870bff2f9c181bcdefadb4beb6/`.
+Merged SHA-256: `dad6e022e219d71a423733940500127208df02870bff2f9c181bcdefadb4beb6`.
+ELF SHA-256: `9329beb0afd00647a4de4d9898f1a10e5ad40d13fffff0b3099d11c141cf1c3b`.
+Application: 6,181,088 bytes, factory free: 44,832 bytes.
+
+The first BLE build (`f8fb989aead9…`) booted and synchronized but left only
+52,236 bytes of internal heap before TLS; MiMo certificate checking failed.
+The final configuration moves the controller to Flash, limits it to two radio
+instances and allocates packet blocks on demand. The observed startup budget
+is now 71,540 bytes free, largest block 59,392 bytes. Flash auto-suspend remains
+disabled because the exact board Flash support has not been established.
+
+Device tests: PASS for MAC `4c:11:ae:31:0e:3c`, segmented verified writes at
+`0x0`, `0x8000`, `0x10000`, matching ELF startup, existing Wi-Fi connection,
+public HTTPS and MiMo HTTP 200 / `ESP_OK`, and cloud snapshot acknowledgment.
+The partition-table hash matches the prior build and no NVS/recording range was
+written. The 45-second monitor is closed. Private logs, verification record
+and console screenshots are retained in `build/reports/xigua-ble-20261002/`.
+
+Unverified: physical PIN/readability, real Android system pairing, active BLE
+heap, scan/select/join/save, interrupted transfer, wrong password, repeated
+window open/close, timeout and post-BLE AI/audio recovery. The owner was asked
+to exercise the actual Android phone flow. Successful flashing/startup does
+not establish those checks; NVS writes while the Flash-based controller runs
+and the remaining factory space deserve attention during acceptance.

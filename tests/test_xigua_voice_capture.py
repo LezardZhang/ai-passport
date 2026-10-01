@@ -54,6 +54,7 @@ typedef struct { size_t size; } esp_partition_t;
 static esp_partition_t partition = { 2 * 1024 * 1024 };
 static uint8_t flash[2 * 1024 * 1024];
 static volatile bool s_voice_stop;
+static bool s_tts_cached_valid;
 static size_t header_writes, read_calls, fail_read_at;
 static bool fail_alloc, fail_write;
 static size_t allocations;
@@ -121,8 +122,10 @@ static void check_wav(size_t length) {
 int main(void) {
     size_t length = 0;
     setup(true, SIZE_MAX);
+    s_tts_cached_valid = true;
     assert(record_voice(&length) == ESP_OK);
     assert(length >= 32000+44 && length <= 32000+2048+44);
+    assert(!s_tts_cached_valid);
     check_wav(length);
     assert(allocations == 0);
     setup(false, SIZE_MAX);

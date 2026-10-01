@@ -6,11 +6,11 @@ int main(void)
 {
     assert(xigua_keyboard_page_count(26) == 1);
     assert(xigua_keyboard_page_count(44) == 2);
-    assert(xigua_keyboard_step(0, 32, -1) == 31);
-    assert(xigua_keyboard_step(31, 32, 1) == 0);
+    assert(xigua_keyboard_step(0, 30, -1) == 29);
+    assert(xigua_keyboard_step(29, 30, 1) == 0);
     assert(xigua_keyboard_row(2, 26, 0, 1) == 8);
     assert(xigua_keyboard_row(8, 26, 0, -1) == 2);
-    assert(xigua_keyboard_row(23, 26, 0, 1) == 25);
+    assert(xigua_keyboard_row(11, 26, 0, 1) == 17);
     assert(xigua_keyboard_row(25, 26, 0, 1) == 26);
     assert(xigua_keyboard_row(26, 26, 0, -1) == 24);
     xigua_keyboard_input_t input = {0};
@@ -24,11 +24,11 @@ int main(void)
         index = xigua_keyboard_press(&input, index, 26, &page, 1);
     assert(index == 10); /* Rapid multi-clicks never freeze the cursor. */
     input = (xigua_keyboard_input_t){0};
-    index = 29; page = 0;
+    index = 11; page = 0;
     index = xigua_keyboard_press(&input, index, 44, &page, 1);
     index = xigua_keyboard_press(&input, index, 44, &page, 1);
     index = xigua_keyboard_double(&input, index, 44, &page, 1);
-    assert(page == 0 && index == 46); /* Restore the gesture page at a boundary. */
+    assert(page == 0 && index == 17); /* Restore the gesture page at a boundary. */
     /* All populated rows and actions are reachable on every partial page. */
     for (size_t n = 1; n <= 64; ++n) {
         for (size_t page = 0; page < xigua_keyboard_page_count(n); ++page) {

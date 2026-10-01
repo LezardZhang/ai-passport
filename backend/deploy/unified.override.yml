@@ -1,0 +1,20 @@
+# Apply LAST after the existing Cockpit and Cloud Backup Compose files.
+# Retains backup volumes, environment, network aliases and port 8080.
+services:
+  cloud-backup:
+    image: personal-services:local
+    build:
+      context: ${CHILDCARE_SOURCE_DIR:?set absolute backend source directory}
+      dockerfile: deploy/Dockerfile.unified
+      additional_contexts:
+        cloud_backup: ${CLOUDBACKUP_SOURCE_DIR:?set Cloud Backup 0.3.2 source directory}
+    env_file:
+      - ${CHILDCARE_ENV_FILE:?set absolute childcare env file}
+    environment:
+      PERSONAL_SERVICES_VERIFY_ONLY: ${PERSONAL_SERVICES_VERIFY_ONLY:-1}
+      CHILDCARE_DB: /config/childcare.db
+      CHILDCARE_MEDIA_DIR: /childcare-media
+    volumes:
+      - ${CHILDCARE_MEDIA_PATH:?set preserved childcare media directory}:/childcare-media
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=3)"]

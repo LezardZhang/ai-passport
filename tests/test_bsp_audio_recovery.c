@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../components/bsp/src/bsp_audio.c"
+#include "../main/xigua_audio_output.h"
 
 struct test_channel { bool running; uint32_t hz; } tx_channel, rx_channel;
 struct test_codec {
@@ -273,6 +274,16 @@ static void assert_active(void) {
 }
 
 int main(void) {
+    assert(!s_initialized);
+    assert(bsp_audio_wake()==ESP_OK);
+    assert(bsp_audio_set_format(12000,16,1)==ESP_ERR_INVALID_STATE);
+    assert(xigua_audio_output_prepare(12000,16,1)==ESP_OK);
+    assert_active();
+    assert(tx_channel.hz==12000 && rx_channel.hz==12000);
+    assert(bsp_audio_sleep()==ESP_OK);
+    assert(xigua_audio_output_prepare(12000,16,1)==ESP_OK);
+    assert_active();
+
     fresh();
     bsp_audio_set_volume(43);
     assert(bsp_audio_set_format(16000, 16, 1) == ESP_OK);

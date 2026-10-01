@@ -31,3 +31,4 @@ int8_t xigua_wifi_scan_rssi(size_t index);
 size_t xigua_wifi_builtin_count(void);
 const char *xigua_wifi_builtin_ssid(size_t index);
 esp_err_t xigua_wifi_connect_builtin(size_t index);
+bool xigua_wifi_credentials_saved(void);

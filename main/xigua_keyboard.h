@@ -3,8 +3,12 @@
 #include <stddef.h>
 
 #define XIGUA_KEYBOARD_COLUMNS 6u
+/* Five rows fit below the password preview, so all 26 letters stay on one
+ * page. Numeric and symbol characters may still span pages; reaching the end
+ * of a page advances automatically. */
 #define XIGUA_KEYBOARD_PAGE_KEYS 30u
-#define XIGUA_KEYBOARD_ACTIONS 6u
+#define XIGUA_KEYBOARD_ACTIONS 4u
+#define XIGUA_KEYBOARD_ACTION_COLUMNS 4u
 
 typedef struct {
     size_t anchor, previous_anchor;
@@ -22,8 +26,8 @@ static inline size_t xigua_keyboard_page_count(size_t characters)
     return (characters + XIGUA_KEYBOARD_PAGE_KEYS - 1) / XIGUA_KEYBOARD_PAGE_KEYS;
 }
 
-/* Move between populated character rows and the two permanently visible action
- * rows. A partial last row clamps the column; empty rows are skipped. */
+/* Move between populated character rows and the permanently visible action
+ * row. A partial last row clamps the column; empty rows are skipped. */
 static inline size_t xigua_keyboard_row(size_t index, size_t characters,
                                        size_t page, int direction)
 {
@@ -32,17 +36,29 @@ static inline size_t xigua_keyboard_row(size_t index, size_t characters,
     if (visible > XIGUA_KEYBOARD_PAGE_KEYS) visible = XIGUA_KEYBOARD_PAGE_KEYS;
     size_t rows = (visible + XIGUA_KEYBOARD_COLUMNS - 1) / XIGUA_KEYBOARD_COLUMNS;
     size_t row, column;
+    const size_t action_rows =
+        (XIGUA_KEYBOARD_ACTIONS + XIGUA_KEYBOARD_ACTION_COLUMNS - 1) /
+        XIGUA_KEYBOARD_ACTION_COLUMNS;
     if (index < characters) {
         row = (index - start) / XIGUA_KEYBOARD_COLUMNS;
         column = (index - start) % XIGUA_KEYBOARD_COLUMNS;
     } else {
-        row = rows + (index - characters) / 3;
-        column = (index - characters) % 3;
+        row = rows + (index - characters) / XIGUA_KEYBOARD_ACTION_COLUMNS;
+        column = (index - characters) % XIGUA_KEYBOARD_ACTION_COLUMNS;
     }
-    size_t next = xigua_keyboard_step(row, rows + 2, direction);
-    if (row < rows && next >= rows) column /= 2;
-    else if (row >= rows && next < rows) column *= 2;
-    if (next >= rows) return characters + (next - rows) * 3 + column;
+    size_t next = xigua_keyboard_step(row, rows + action_rows, direction);
+    if (row < rows && next >= rows) {
+        column = column * XIGUA_KEYBOARD_ACTION_COLUMNS / XIGUA_KEYBOARD_COLUMNS;
+        if (column >= XIGUA_KEYBOARD_ACTION_COLUMNS) column = XIGUA_KEYBOARD_ACTION_COLUMNS - 1;
+    } else if (row >= rows && next < rows) {
+        column = column * XIGUA_KEYBOARD_COLUMNS / XIGUA_KEYBOARD_ACTION_COLUMNS;
+        if (column >= XIGUA_KEYBOARD_COLUMNS) column = XIGUA_KEYBOARD_COLUMNS - 1;
+    }
+    if (next >= rows) {
+        size_t action = (next - rows) * XIGUA_KEYBOARD_ACTION_COLUMNS + column;
+        if (action >= XIGUA_KEYBOARD_ACTIONS) action = XIGUA_KEYBOARD_ACTIONS - 1;
+        return characters + action;
+    }
     size_t offset = next * XIGUA_KEYBOARD_COLUMNS;
     size_t width = visible - offset;
     if (width > XIGUA_KEYBOARD_COLUMNS) width = XIGUA_KEYBOARD_COLUMNS;

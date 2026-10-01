@@ -11,6 +11,8 @@ usage() {
 run_static_checks() {
     local actionlint_bin
     local test_dir
+    local gc_sections_flag="-Wl,--gc-sections"
+    if [[ "$(uname -s)" == Darwin ]]; then gc_sections_flag="-Wl,-dead_strip"; fi
 
     python3 tools/check_repo.py
 
@@ -39,11 +41,28 @@ run_static_checks() {
         tests/test_xigua_ai_ui.c -o "${test_dir}/test_xigua_ai_ui"
     "${test_dir}/test_xigua_ai_ui"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_xigua_tts_stream.c main/xigua_tts_stream.c \
+        -o "${test_dir}/test_xigua_tts_stream"
+    "${test_dir}/test_xigua_tts_stream"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_xigua_tts_buffer.c -o "${test_dir}/test_xigua_tts_buffer"
+    "${test_dir}/test_xigua_tts_buffer"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_xigua_cloud.c -o "${test_dir}/test_xigua_cloud"
+    "${test_dir}/test_xigua_cloud"
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_adpcm.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_tts_downsample.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_tts_pause.py
+    python3 tests/test_xigua_song_pause.py
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_xigua_menu.c -o "${test_dir}/test_xigua_menu"
     "${test_dir}/test_xigua_menu"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_xigua_sleep.c -o "${test_dir}/test_xigua_sleep"
     "${test_dir}/test_xigua_sleep"
+    "${CC:-cc}" -D_POSIX_C_SOURCE=200809L -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_xigua_care.c main/xigua_care.c -o "${test_dir}/test_xigua_care"
+    "${test_dir}/test_xigua_care"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Itests/xigua_stubs -Imain \
         tests/test_xigua_wifi.c -o "${test_dir}/test_xigua_wifi"
     "${test_dir}/test_xigua_wifi"
@@ -72,13 +91,17 @@ run_static_checks() {
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \
-            "tests/test_demo_${demo}_runtime.c" -Wl,--gc-sections \
+            "tests/test_demo_${demo}_runtime.c" "${gc_sections_flag}" \
             -o "${test_dir}/test_demo_${demo}_runtime"
         "${test_dir}/test_demo_${demo}_runtime"
     done
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_deep_sleep_contract.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_voice_capture.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_tts.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_voice_records.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_status_bar.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_ble.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_network.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_full_font.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_repo.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py

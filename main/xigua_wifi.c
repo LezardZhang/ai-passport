@@ -552,3 +552,10 @@ esp_err_t xigua_wifi_connect_builtin(size_t index)
     if (err != ESP_OK) return err;
     return xigua_wifi_connect();
 }
+
+bool xigua_wifi_credentials_saved(void)
+{
+    return s_state==XIGUA_WIFI_CONNECTED &&
+        memcmp(s_saved_config.sta.ssid,s_sta_config.sta.ssid,sizeof(s_sta_config.sta.ssid))==0 &&
+        memcmp(s_saved_config.sta.password,s_sta_config.sta.password,sizeof(s_sta_config.sta.password))==0;
+}

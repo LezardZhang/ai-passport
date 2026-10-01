@@ -23,6 +23,14 @@ FIXTURES = [
     {"actions": [{"action": "record_tummy"}]},
     {"actions": [{"action": "start_sleep"}]},
     {"actions": [{"action": "end_sleep"}]},
+    {"actions": [{"action": "edit_last_feeding", "amount_ml": 120}]},
+    {"actions": [{"action": "create_reminder", "title": "收东西", "delay_min": 20}]},
+    {"actions": [{"action": "cancel_reminder", "id": 1}]},
+    {"actions": [{"action": "record_sleep", "start_time": "2026-09-30 21:00", "end_time": "2026-10-01 06:00"}]},
+    {"actions": [{"action": "record_feeding", "amount_ml": 120, "time": "2026-02-30 12:00"}]},
+    {"actions": [{"action": "record_feeding", "amount_ml": 120, "time": "08:00", "days_ago": 1}]},
+    {"actions": [{"action": "record_sleep", "start_time": "2026-10-01 06:00", "end_time": "2026-09-30 21:00"}]},
+    {"actions": [{"action": "edit_last_feeding", "amount_ml": 5}]},
 ]
 
 
@@ -76,6 +84,8 @@ PREFIX = r'''
 #include <strings.h>
 #include <time.h>
 #include "xigua_sleep.h"
+#include "xigua_cloud_state.h"
+#include "xigua_care.h"
 typedef int esp_err_t;
 #define ESP_OK 0
 #define ESP_FAIL -1
@@ -84,6 +94,7 @@ typedef int esp_err_t;
 #define ESP_ERR_INVALID_STATE 3
 #define ESP_ERR_INVALID_RESPONSE 4
 #define ESP_ERR_TIMEOUT 5
+#define ESP_ERR_NOT_FOUND 6
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGW(...) ((void)0)
 #define pdTRUE 1
@@ -98,7 +109,9 @@ typedef struct cJSON {
 
 DOUBLES = r'''
 static x_state_t s_state;
-static x_undo_t s_voice_undo;
+static x_undo_t s_voice_undo, s_undo;
+static xigua_care_t s_care, staged_care, disk_care;
+static struct { bool valid; size_t slot; uint64_t seq; int64_t expires_us; x_event_t before, after; } s_pending_edit;
 static x_persisted_t staged, disk;
 static x_sleep_times_t staged_times, disk_times;
 static bool s_nvs_open = true;
@@ -122,6 +135,8 @@ static int nvs_set_blob(int nvs, const char *key, const void *value, size_t size
     if (fail_set) return ESP_FAIL;
     if (!strcmp(key, "state")) {
         assert(size == sizeof(staged)); memcpy(&staged, value, size);
+    } else if (!strcmp(key, "care_v1")) {
+        assert(size == sizeof(staged_care)); memcpy(&staged_care, value, size);
     } else {
         assert(!strcmp(key, "sleep_times") && size == sizeof(staged_times));
         memcpy(&staged_times, value, size);
@@ -138,7 +153,7 @@ static int nvs_set_str(int nvs, const char *key, const char *value) {
 static int nvs_commit(int nvs) {
     assert(nvs == 1 && locked); ++commits;
     if (fail_commits) { --fail_commits; return ESP_FAIL; }
-    disk = staged; disk_times = staged_times; return ESP_OK;
+    disk = staged; disk_times = staged_times; disk_care = staged_care; return ESP_OK;
 }
 static bool cJSON_IsObject(const cJSON *x) { return x && x->type == 1; }
 static bool cJSON_IsArray(const cJSON *x) { return x && x->type == 2; }
@@ -164,12 +179,39 @@ static cJSON *cJSON_ParseWithOpts(const char *text, const char **end, bool stric
 static void cJSON_Delete(cJSON *x) { (void)x; }
 '''
 
+DOUBLES += r'''
+static cJSON *captured_context;
+static cJSON *cJSON_CreateObject(void) { cJSON *x=calloc(1,sizeof(*x)); assert(x); x->type=1; return x; }
+static cJSON *cJSON_CreateArray(void) { cJSON *x=cJSON_CreateObject(); x->type=2; return x; }
+static void cJSON_AddItemToArray(cJSON *parent,cJSON *child) {
+    cJSON **tail=&parent->child; while (*tail) tail=&(*tail)->next; *tail=child;
+}
+static void cJSON_AddItemToObject(cJSON *parent,const char *name,cJSON *child) {
+    child->string=strdup(name); cJSON_AddItemToArray(parent,child);
+}
+static void cJSON_AddStringToObject(cJSON *parent,const char *name,const char *value) {
+    cJSON *child=cJSON_CreateObject(); child->type=3; child->valuestring=strdup(value);
+    cJSON_AddItemToObject(parent,name,child);
+}
+static void cJSON_AddNumberToObject(cJSON *parent,const char *name,double value) {
+    cJSON *child=cJSON_CreateObject(); child->type=4; child->valuedouble=value; child->valueint=(int)value;
+    cJSON_AddItemToObject(parent,name,child);
+}
+static void cJSON_AddBoolToObject(cJSON *parent,const char *name,bool value) { cJSON_AddNumberToObject(parent,name,value); }
+static char *cJSON_PrintUnformatted(cJSON *root) { captured_context=root; return strdup("{}"); }
+static bool xigua_backend_care_context(char *out,size_t capacity,uint64_t *revision) {
+    snprintf(out,capacity,"cached cloud context"); *revision=7; return true;
+}
+'''
+
 CHECKS = r'''
 static void reset(void) {
     assert(!locked);
     memset(&s_state, 0, sizeof(s_state)); memset(&s_voice_undo, 0, sizeof(s_voice_undo));
     memset(&disk, 0, sizeof(disk)); staged = disk;
     memset(&disk_times, 0, sizeof(disk_times)); staged_times = disk_times;
+    xigua_care_init(&s_care); staged_care = disk_care = s_care;
+    s_pending_edit.valid = false; memset(&s_undo, 0, sizeof(s_undo));
     fail_set = fail_commits = commits = 0; now_epoch = 1700000000; now_us = 1000000;
     (void)X_STATE_MAGIC; (void)X_NVS_NAMESPACE;
 }
@@ -264,6 +306,41 @@ int main(void) {
     now_us += 60000000; now_epoch = 60;
     assert(run(11, false) == ESP_OK && disk.sleep_minutes == 1);
     assert(disk_times.entries[0].start_epoch == 0 && disk_times.entries[0].end_epoch == 0);
+    /* Editing is a preview until explicitly confirmed; stale targets and save failures retain originals. */
+    reset(); assert(run(0, false) == ESP_OK); int saved_commits = commits;
+    assert(run(12, false) == ESP_OK && s_pending_edit.valid);
+    assert(disk.events[0].amount == 150 && commits == saved_commits);
+    assert(confirm_feed_edit(false) == ESP_OK && disk.events[0].amount == 150);
+    assert(run(12, false) == ESP_OK && confirm_feed_edit(true) == ESP_OK);
+    assert(disk.events[0].amount == 120 && disk.milk_count == 1 && s_undo.valid);
+    assert(run(19, false) == ESP_ERR_INVALID_ARG && !s_pending_edit.valid);
+    assert(run(12, false) == ESP_OK); s_state.data.events[0].amount = 130;
+    assert(confirm_feed_edit(true) == ESP_ERR_INVALID_STATE && disk.events[0].amount == 120);
+    reset(); assert(run(0, false) == ESP_OK); assert(run(12, false) == ESP_OK);
+    fail_commits = 1; assert(confirm_feed_edit(true) == ESP_FAIL && disk.events[0].amount == 150);
+    reset(); assert(run(13, false) == ESP_OK && disk_care.items[0].due_epoch == now_epoch + 1200);
+    assert(run(14, false) == ESP_OK && !disk_care.items[0].id);
+    reset(); fail_commits = 1; assert(run(13, false) == ESP_FAIL && !s_care.items[0].id && !disk_care.items[0].id);
+    reset(); now_epoch = 0; assert(run(13, false) == ESP_ERR_INVALID_ARG);
+    reset(); now_epoch = 1790856000;
+    assert(run(15, false) == ESP_OK && disk.events[0].duration_min == 540);
+    assert(disk_times.entries[0].end_epoch - disk_times.entries[0].start_epoch == 540 * 60);
+    assert(run(16, false) == ESP_ERR_INVALID_ARG && disk.event_count == 1);
+    assert(run(17, false) == ESP_OK);
+    time_t yesterday_raw = (time_t)disk.events[1].epoch; struct tm yesterday;
+    mock_localtime_r(&yesterday_raw, &yesterday);
+    assert(yesterday.tm_mday == 30 && yesterday.tm_hour == 8);
+    assert(run(18, false) == ESP_ERR_INVALID_ARG && disk.event_count == 2);
+    char *context = xigua_app_ai_context(); assert(context); free(context);
+    assert(cJSON_GetObjectItemCaseSensitive(captured_context, "today_local_completed_sleep_min")->valuedouble == 360);
+    assert(cJSON_GetObjectItemCaseSensitive(captured_context, "today_local_milk_ml")->valuedouble == 0);
+    assert(cJSON_GetObjectItemCaseSensitive(captured_context, "cloud_revision")->valuedouble == 7);
+    assert(run(0, false) == ESP_OK);
+    context = xigua_app_ai_context(); assert(context); free(context);
+    assert(cJSON_GetObjectItemCaseSensitive(captured_context, "today_local_milk_ml")->valuedouble == 150);
+    /* Backdated entries do not replace the chronologically latest feeding in handoff. */
+    char handoff[768]; format_local_handoff(&s_state, handoff, sizeof(handoff));
+    assert(strstr(handoff,"奶量 150"));
     puts("Voice records, exact sleep times, reboot/migration, ring paging and NVS rollback: PASS");
 }
 '''
@@ -272,15 +349,17 @@ int main(void) {
 def main():
     source = (ROOT / "main/xigua_app.c").read_text(encoding="utf-8")
     types = source[source.index("typedef enum {\n    X_ACTIVE_NONE"):source.index("static lv_obj_t *s_screen;")]
+    zones = re.search(r"static const char \*const TIMEZONE_NAMES\[\] = .*?;", source, re.S).group(0)
     food = re.search(r"static const char \*const FEED_INGREDIENTS\[\] = .*?;", source).group(0)
     functions = []
     for name in ("state_save_locked", "append_event_locked", "append_sleep_event_locked",
-                 "json_event_time", "ingredient_from_json", "format_sleep_time", "event_is_today",
+                 "undo_capture_locked", "undo_clear", "care_event_time", "ingredient_from_json", "format_sleep_time", "event_is_today",
                  "sleep_record_slot",
                  "feed_record_slot", "feed_record_count", "format_feed_record",
                  "sleep_page_count", "format_sleep_record", "load_sleep_times",
                  "json_number_in_range", "apply_sleep_action_locked", "apply_ai_action_locked",
-                 "xigua_app_process_ai_reply"):
+                 "care_save_locked", "care_action_locked", "stage_feed_edit_locked", "confirm_feed_edit",
+                 "xigua_app_process_ai_reply", "format_local_handoff", "xigua_app_ai_context"):
         match = re.search(rf"^(?:static )?[^\n]+\b{name}\([^;]*?\)\n\{{.*?^\}}", source, re.M | re.S)
         assert match, name
         functions.append(match.group(0))
@@ -288,12 +367,12 @@ def main():
         path = Path(directory)
         test = path / "records.c"
         exe = path / ("records.exe" if os.name == "nt" else "records")
-        test.write_text(PREFIX + types + food + trees() + DOUBLES + "\n".join(functions) + CHECKS,
+        test.write_text(PREFIX + types + food + zones + trees() + DOUBLES + "\n".join(functions) + CHECKS,
                         encoding="utf-8")
         subprocess.run(shlex.split(os.environ.get("CC", "cc")) +
-                       ["-std=c11", "-Wall", "-Wextra", "-Werror", "-I" + str(ROOT / "main"),
-                        str(test), "-o", str(exe)], check=True)
-        subprocess.run([str(exe)], check=True)
+                       ["-D_POSIX_C_SOURCE=200809L", "-std=c11", "-Wall", "-Wextra", "-Werror", "-I" + str(ROOT / "main"),
+                        str(test), str(ROOT / "main/xigua_care.c"), "-o", str(exe)], check=True)
+        subprocess.run([str(exe)], check=True, env={**os.environ, "TZ": "UTC"})
 
 
 if __name__ == "__main__":

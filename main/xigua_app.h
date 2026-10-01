@@ -24,3 +24,5 @@ esp_err_t xigua_app_ai_response(const char *json);
  * JSON with a local confirmation. Plain prose remains text; incomplete
  * commands are rejected. No LVGL objects are accessed. */
 esp_err_t xigua_app_process_ai_reply(char *text, size_t capacity, bool truncated);
+/* Worker-owned allocation, containing bounded local records and cached cloud data. */
+char *xigua_app_ai_context(void);

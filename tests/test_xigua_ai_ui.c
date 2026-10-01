@@ -34,7 +34,35 @@ int main(void)
     x_ai_input(&ui, X_AI_OK);
     assert(ui.view == X_AI_READY);
     assert(x_ai_page_count(0, 190) == 1);
+    /* Pause/resume and restart are separate actions and preserve text paging. */
+    ui = (x_ai_ui_t){ .view = X_AI_READING, .pages = 4, .page = 2,
+                     .has_reply = true, .story_reply = true, .speaking = true };
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_NONE && ui.view == X_AI_ACTIONS);
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_PAUSE_VOICE);
+    ui.paused = true;
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_RESUME_VOICE && ui.page == 2);
+    x_ai_input(&ui, X_AI_DOWN);
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_RESTART_VOICE);
+    x_ai_input(&ui, X_AI_DOWN);
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_NONE && ui.view == X_AI_READING && ui.page == 2);
+    x_ai_input(&ui, X_AI_OK);
+    x_ai_input(&ui, X_AI_UP); /* Four actions wrap to Another story. */
+    assert(ui.focus == 3);
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_STOP_VOICE && ui.view == X_AI_READY);
+    assert(ui.has_reply);
+    assert(x_ai_input(&ui, X_AI_BACK) == X_AI_HOME);
+    ui = (x_ai_ui_t){ .view = X_AI_ACTIONS, .story_reply = true, .has_reply = true };
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_READ_REPLY);
+    x_ai_input(&ui, X_AI_DOWN);
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_READ_REPLY);
     assert(x_ai_page_count(190, 190) == 1);
+    ui = (x_ai_ui_t){ .view = X_AI_ACTIONS, .has_reply = true, .page = 2 };
+    x_ai_input(&ui, X_AI_UP);
+    assert(ui.focus == 3 && x_ai_input(&ui, X_AI_OK) == X_AI_READ_REPLY);
+    ui.speaking = true;
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_PAUSE_VOICE);
+    ui.paused = true;
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_RESUME_VOICE && ui.page == 2);
     assert(x_ai_page_count(191, 190) == 2);
     assert(x_ai_page_count(380, 190) == 2);
     char text[10];

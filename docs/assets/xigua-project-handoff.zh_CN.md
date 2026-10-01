@@ -252,3 +252,169 @@ NVS 和 `voice_tmp`。启动后自动连接内置 `GUANTANG_2.4G`，取得 `192.
 服务包含 `/admin` 浏览器管理界面、设备上传与播放回报接口、孩子汇总和记录查询、儿歌／故事／白噪音音频目录，以及稳定的 `/v1/hermes/children/{child_id}/analysis-input` 导出。Hermes 使用独立 token，可以上传有大小限制的音频文件并补充目录元数据，但不能写育儿事件。设备、管理端、Hermes 和公开读取分别使用不同环境变量。`backend/docker-compose.yml` 用命名 Docker 卷持久化数据库和音频。
 
 后端主机测试通过（`python -m pytest -q backend/tests/test_api.py`，4 项）。由于本机没有 Docker，且 Edge 中的腾讯云控制台会话没有暴露给自动化桥接，尚未执行 Docker 镜像构建和腾讯云部署；服务器地址、域名、HTTPS 反向代理和最终环境变量仍需部署时提供。
+
+## 记录上下文、照护交接、修正和提醒（2026-10-01）
+
+所有者选择了结合记录的语音问答、照护交接、语音补记与修正，以及家长设置的提醒。
+这些功能已加入现有西瓜应用。普通问答携带有界的本地记录、当天统计、正在进行的睡眠
+和提醒；缓存的云端上下文补充七日汇总、修订号、时区和同步时间，不把云端和本地总量相加。
+照护交接提供独立分页阅读和可选朗读；网页交接页可持久化最多 160 字的家长留言。
+
+补记严格校验本地日期，支持跨午夜睡眠。修正目前限于最近一次保存的喂养记录：显示修改
+前后值，默认取消，必须明确选择保存。确认后保留事件序号，同步修正不产生重复记录。
+最多八条单次提醒保存在独立的 `care_v1` NVS 键中；到时显示弹窗，音频空闲时播放简短
+离线提示音，可完成或十分钟后再提醒。重启后等待可信时钟。原有分区和记录布局不变。
+具体操作和限制见[应用设计](xigua-ui-design.zh_CN.md#10-记录上下文交接纠错和提醒2026-10-01)。
+
+Build：PASS。ESP-IDF 5.5.3 环境下完整 `./tools/validate.sh` 门禁通过。
+Host tests：PASS，覆盖真实应用事务／上下文函数、纯日期／提醒逻辑、回复朗读控制和
+中文字形。后端全部 24 项测试通过。网页交接页使用临时数据库验收，合成家长留言的保存
+和刷新后读取通过。
+
+源码／配置检查点：`0000106ca568a0d50553705a5101d8f1c13c7ef7`，保存在
+`refs/codex/checkpoints/xigua-care-453b5eef7b59`，没有移动工作分支或改变其暂存区。
+已核验归档：
+`build/firmware/453b5eef7b59d1b508726e0b399e4e0e0b4f4b0a0ab2f5b2ac1fb45cff801acc/`。
+完整镜像 SHA-256：
+`453b5eef7b59d1b508726e0b399e4e0e0b4f4b0a0ab2f5b2ac1fb45cff801acc`。
+匹配 ELF SHA-256：
+`9ecac07d7ccd24312da0251601cda679a9e012d1d25e6dab42d0da9571d28ee0`。
+应用大小 5,812,400 字节，factory 剩余 413,520 字节。
+
+Device tests：PASS，仅指分段刷写、写入哈希和已观察的启动窗口。已识别的 ESP32-C3
+MAC 为 `4c:11:ae:31:0e:3c`，串口为 `/dev/cu.usbmodem11101`。引导程序、未变化的
+分区表和应用分别写入 `0x0`、`0x8000`、`0x10000`，NVS 和录音数据位于写入范围之外。
+45 秒串口观察匹配 ELF 前缀 `9ecac07d7`，Wi-Fi 连接成功，公网 HTTPS 和 MiMo 文字
+自检均为 HTTP 200／`ESP_OK`。TLS 内部堆空闲 76,996 字节，最大块 65,536 字节。
+此窗口未见 panic 或故障，原始日志仅保存在本地。
+
+Unverified：实际语音查询、补记和修正确认、交接翻页与朗读、提醒声音／稍后提醒／重启，
+以及长期堆使用情况。更新后的后端已部署，云端家长留言和七日上下文以及设备本地功能
+均已可用。后端源码包为
+`build/xigua-care-backend.tar.gz`，SHA-256：
+`293eaf91365bff9f337ecb8bd4bfa6033b5f3f9abb25057e3781dda0e83dd6c0`。
+
+获得所有者明确授权后，已在现有服务器完成生产部署，版本目录为
+`/home/clouddata/releases/personal-services-20261001-care`。传输后的源码包哈希一致，
+源码比对仅有 `app/care.py`、`app/main.py`、`app/personal.py` 和
+`web/console.html` 四个文件不同。仅重建 `cockpit-cloud-cloud-backup-1`，其他容器
+身份未变。镜像标签为 `personal-services:20261001-134058`，镜像 SHA-256 为
+`8b53dd8e9ddeb9a3a09e503b3a625f874552a149eb8ad328c582d304d2ecf53f`。
+
+一致性完整备份大小为 4,549,537,564 字节，SHA-256 为
+`bc9986884d51ed08cd2e2137ef1f6e4b6692e8bd2a44d712df88e15f0c228c25`。
+归档对象、原备份元数据／清单和育儿 SQLite 完整性均通过校验。原有宝宝／设置、十首
+音频及来源信息、五条已删除记录均保留；本次升级前后，服务器都没有有效事件记录。
+
+线上源码与发布版本一致。`/readyz`、带认证的交接／上下文读取、角色权限边界和
+160 字留言限制均通过。固件现有设备凭据也通过公网代理读取了新上下文，响应为
+1,091 字节、修订号 18。浏览器登录和线上交接页验收通过，服务切换后设备继续连接。
+这些 HTTP／网页检查不能证明实机语音或提醒验收已完成。
+
+私有检查点、`verification-report.json`、旧镜像和 `rollback.sh` 均保留在发布目录。
+如需恢复旧服务镜像并保留当前数据，可在服务器执行
+`sh /home/clouddata/releases/personal-services-20261001-care/rollback.sh`。
+报告的本地副本为 `build/xigua-care-cloud-verification.json`。
+
+## 常驻时间与网络状态栏（2026-10-01）
+
+所有应用页面已增加独立状态栏，显示本地 `HH:MM`、Wi-Fi/探测状态和电量，
+下方为页面标题。每秒刷新，停留页面或阅读回复时也会更新。时间未校准显示
+`--:--`，电量未知显示 `--%`，获得 IP 与公网 HTTPS 探测成功分别显示。
+模型失败不会单独把网络标为失败。原有内容、键盘和换页区域保持不变。
+
+Build: PASS，ESP-IDF 5.5.3 下完整 `./tools/validate.sh` 通过。
+Host tests: PASS，包括真实状态栏刷新、时钟/时区和网络状态变化、电量未知，
+以及所选 16 像素字体的字形覆盖与文字宽度。
+本地源码/配置检查点：`b51ad8f0cdc8124cb6c10c470921081ac3907b92`，
+引用 `refs/codex/checkpoints/xigua-status-ec1d729d8ff5`，分支和暂存区未改变。
+验证通过的匹配 BIN/ELF/MAP 归档：
+`build/firmware/ec1d729d8ff5505efcb06427ac607c0c069a790abbf22e111148f2a59edb6362/`。
+完整镜像 SHA-256：
+`ec1d729d8ff5505efcb06427ac607c0c069a790abbf22e111148f2a59edb6362`。
+ELF SHA-256：
+`2e9696a8ad3a399fd283ebafd2954401934e78bde1b99b42f0ba74e2fa4b3930`。
+应用 5,813,200 字节，factory 剩余 412,720 字节。
+
+Device tests: PASS，仅覆盖已识别 ESP32-C3 的 `0x0`、`0x8000`、`0x10000`
+分段写入、全部写入哈希以及 45 秒启动观察。分区表哈希与上一版照护固件相同，
+NVS 与录音区未被写入。日志中的 ELF 匹配；Wi-Fi 连接、公网 HTTPS 与 MiMo
+文本自检均返回 200 / `ESP_OK`，观察期间未见 panic/fault。TLS 内部堆空闲
+77,104 字节，最大连续块 65,536 字节。监视串口已关闭，私有原始日志与脱敏
+报告保留在 `build/`。
+
+Unverified：实体屏幕状态栏的阅读效果、圆角裁切、时间显示及跨页面网络状态
+变化。NFC 写入和手机 BLE 配置尚未实现。拟定流程、手机平台/HTTPS 输入与
+无线内存预算要求记录在
+[应用设计](xigua-ui-design.zh_CN.md#11-常驻状态栏与手机配置方案2026-10-01)。
+
+## 手机登录与完整管理 Key（2026-10-01）
+
+登录输入框现使用明文文本，关闭自动大写、自动纠错，并在提交时去掉首尾空白。
+此前登录失败，是读取编辑器换行文本时漏掉了 Key 的末尾三个字符。服务器原有
+64 位完整 Key 已通过登录验证；截断的值返回 401。本文不记录凭据值。
+
+生产登录更新目录：`/home/clouddata/releases/personal-services-20261001-login-v2`。
+镜像：`personal-services:login-20261001-152315`；SHA-256：
+`456cdc13f8bb639663c0cb9fa10e63d5ff95c07a35175abd067d107983d2f52f`。
+镜像仅修改登录 HTML；已验证运行环境、数据挂载和其他容器保持不变。
+原镜像与 HTML 保留，回退命令为：
+`sh /home/clouddata/releases/personal-services-20261001-login-v2/rollback.sh`。
+
+Build: PASS，完整检查通过。Host tests: PASS，仓库测试与24项后端测试通过。
+公开页面浏览器登录：PASS，完整 Key 带首尾空格也能正常登录。
+Device tests: NOT RUN，本次只修改网页。Unverified：真实 iPhone、Android
+输入法与粘贴体验。本次无需更新固件。
+
+## 安卓 BLE Wi-Fi 配网与 HTTPS（2026-10-02）
+
+已实现配套固件与工作台的安卓流程：设备进入“Wi-Fi配网 → 手机蓝牙配网”，
+五分钟窗口、每次新六位屏幕 PIN、加密鉴权 GATT、附近网络扫描、手动
+SSID／密码、不回显密码的内置网络选择，以及 IP／保存结果。新凭据仅在
+连接成功后保存。BLE 期间暂停 AI／云端新请求，完成、离开设备配网页或
+超时后关闭 BLE 并恢复任务。详见
+[应用设计](xigua-ui-design.zh_CN.md#12-安卓-ble-配网2026-10-02)。
+API Key／模型、多份已保存 Wi-Fi 编辑和 iPhone 仍待后续。
+
+手机入口：`https://162.14.108.234/cloud-backup/console#phone`。
+原 HTTP NFC 登录地址自动转入此 HTTPS 来源。已有 Let's Encrypt IP 证书
+通过可信校验，1Panel 原有自动续签开关已开启。独立 OpenResty 路由连接新增
+回环监听 `127.0.0.1:32071`，只信任私网代理头，以保留 HTTPS 协议和同源
+CSRF 校验。设备／备份 HTTP 协议兼容。只重建备份应用容器，已核对原凭据、
+数据挂载、其他容器 ID 与 Docforge 原站点配置。
+
+部署目录：`/home/clouddata/releases/personal-services-20261002-ble`。
+镜像 `personal-services:ble-20261002`，SHA-256：
+`7e21d0718745864dd884f786fb48a8bf5c78c8fc49ae1b807b92d64d6062b32f`。
+两个数据库均保留本地 SQLite 检查点，原镜像、私有 Compose 设置和只清理
+本次路由的回退脚本保留。网页回退：
+`sh /home/clouddata/releases/personal-services-20261002-ble/rollback.sh`。
+
+Build: PASS，完整门禁与合并镜像／调试归档校验。
+Host tests: PASS，仓库测试、26项后端测试、实际 JavaScript 客户端分包／
+回执／断线测试。浏览器检查：PASS，原地址跳转 HTTPS、登录、脚本鉴权、
+同源退出登录与390像素布局。
+
+最终源码检查点：`25588a74b541bb23c87a56f11bdcbcec4d527695`；
+ref `refs/codex/checkpoints/xigua-ble-dad6e022e219`，当前分支／索引保持不变。
+配套 BIN／ELF／MAP 归档：
+`build/firmware/dad6e022e219d71a423733940500127208df02870bff2f9c181bcdefadb4beb6/`。
+合并 SHA-256：`dad6e022e219d71a423733940500127208df02870bff2f9c181bcdefadb4beb6`。
+ELF SHA-256：`9329beb0afd00647a4de4d9898f1a10e5ad40d13fffff0b3099d11c141cf1c3b`。
+应用6,181,088字节，factory 剩余44,832字节。
+
+第一份 BLE 构建（`f8fb989aead9…`）能启动并同步，但 TLS 前内部堆仅余
+52,236字节，MiMo 证书校验失败。最终配置将控制器移至 Flash，限制两个
+无线实例，报文块按需申请。启动实测空闲71,540字节，最大连续块59,392字节。
+因未确认本板 Flash 具体支持情况，未开启 Flash 自动挂起。
+
+Device tests: PASS，MAC `4c:11:ae:31:0e:3c`，在 `0x0`、`0x8000`、
+`0x10000` 写入已验证分段镜像，匹配 ELF 启动、原 Wi-Fi 连接、公共 HTTPS
+与 MiMo HTTP 200／`ESP_OK`、云端快照回执。分区表哈希与前一版一致，
+未写 NVS／录音区域。45秒监视已关闭。私有日志、验收记录和工作台截图
+保留在 `build/reports/xigua-ble-20261002/`。
+
+Unverified：实体 PIN／字形可读性、安卓系统真实配对、BLE 工作期内存、
+扫描／选网／连接／保存、中断、错密码、反复开关窗口、超时和结束后的
+AI／音频恢复。已请用户测试真实安卓流程。刷写／启动成功不证明这些项目；
+Flash 控制器工作时的 NVS 写入与剩余 factory 空间也需在验收中关注。
