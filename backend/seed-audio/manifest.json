@@ -1,35 +1,5 @@
 [
   {
-    "id": "story-little-ant-and-leaf",
-    "title": "小蚂蚁和一片叶子",
-    "category": "story",
-    "file": "story-little-ant-and-leaf.wav",
-    "attribution": {
-      "source_url": "https://wiki.librivox.org/index.php?title=Copyright_and_Public_Domain",
-      "creator": "西瓜育儿原创中文朗读（公版寓言改写）",
-      "license": "Public Domain Mark 1.0",
-      "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
-      "changes": "原创中文改写并转换为 12 kHz 单声道 PCM WAV"
-    },
-    "sha256": "be16267f4ab213e59098ade5b7a14103f161375d892940cb62499850e1b271fd",
-    "duration_ms": 0
-  },
-  {
-    "id": "story-little-star-lost-way",
-    "title": "迷路的小星星",
-    "category": "story",
-    "file": "story-little-star-lost-way.wav",
-    "attribution": {
-      "source_url": "https://wiki.librivox.org/index.php?title=Copyright_and_Public_Domain",
-      "creator": "西瓜育儿原创中文朗读（公版寓言改写）",
-      "license": "Public Domain Mark 1.0",
-      "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
-      "changes": "原创中文改写并转换为 12 kHz 单声道 PCM WAV"
-    },
-    "sha256": "be16267f4ab213e59098ade5b7a14103f161375d892940cb62499850e1b271fd",
-    "duration_ms": 0
-  },
-  {
     "id": "classical-bach-c-major",
     "title": "巴赫：C 大调前奏曲（早教合成版）",
     "category": "classical",

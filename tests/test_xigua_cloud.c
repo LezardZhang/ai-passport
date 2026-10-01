@@ -42,6 +42,12 @@ int main(void)
     memset(long_title,'a',94); memcpy(long_title+94,"儿歌",7);
     assert(xigua_catalog_track(&tracks[0],"http://cloud/app",long_title,"http://cloud/app/media/a.wav","audio/wav",true));
     assert(strlen(tracks[0].title)==94 && tracks[0].white); /* No split UTF-8 character. */
+    assert(!strcmp(tracks[0].category,"white_noise"));
+    assert(xigua_catalog_track_category(&tracks[1],"http://cloud/app","故事","http://cloud/app/media/story.wav","audio/wav","story"));
+    assert(!tracks[1].white && !strcmp(tracks[1].category,"story"));
+    assert(xigua_catalog_track_category(&tracks[1],"http://cloud/app","古典","http://cloud/app/media/classical.wav","audio/wav","classical"));
+    assert(!strcmp(tracks[1].category,"classical"));
+    assert(!xigua_catalog_track_category(&tracks[1],"http://cloud/app","未知","http://cloud/app/media/other.wav","audio/wav","podcast"));
     puts("Cloud sequence rollover, undo and WAV boundaries: PASS");
     return 0;
 }

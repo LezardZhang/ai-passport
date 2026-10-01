@@ -214,7 +214,7 @@ text-only for now.
 Audio library is the second home entry, visible on the first three-card page. The cloud
 catalog caches at most 16 song, educational-story, classical-early-learning, or
 white-noise tracks. Each item keeps its category label so the device can distinguish
-儿歌, 益智故事, 早教古典, and 白噪音 while browsing. UP/DOWN selects a title or the
+Songs, Educational Stories, Classical Early Learning, and White Noise while browsing. UP/DOWN selects a title or the
 Pause/Resume, Stop, and Refresh controls; OK activates the selection. Canonical
 12 kHz, 16-bit mono WAV is validated before PCM playback on the shared AI worker.
 Pause saves the emitted PCM byte position, closes HTTP, sleeps the codec, and

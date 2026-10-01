@@ -57,6 +57,8 @@ def write_story(path: Path, text: str) -> None:
     with tempfile.TemporaryDirectory(prefix="xigua-story-") as tmp:
         aiff = Path(tmp) / "story.aiff"
         subprocess.run([say, "-v", "Tingting", "-o", str(aiff), text], check=True)
+        if aiff.stat().st_size <= 4096:
+            raise RuntimeError("macOS say produced no audio; run this generator on a host with the Tingting voice installed")
         subprocess.run([ffmpeg, "-y", "-v", "error", "-i", str(aiff), "-ac", "1", "-ar", str(RATE), "-c:a", "pcm_s16le", str(path)], check=True)
 
 
