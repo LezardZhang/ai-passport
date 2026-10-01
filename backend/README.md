@@ -3,7 +3,8 @@
 # Xigua childcare backend
 
 This service stores childcare events from the ESP32-C3 assistant and exposes a
-small audio catalogue for songs, stories, and white noise. It uses SQLite for a
+small audio catalogue for songs, educational stories, classical early-learning
+music, and white noise. It uses SQLite for a
 single Tencent Cloud server and keeps the database and media files in `/data`.
 
 Run locally:
@@ -45,7 +46,10 @@ The first client flow is:
 2. Register a device with `POST /v1/devices/register`.
 3. Push local NVS records in batches.
 4. Read `/v1/children/{id}/summary` and `/events` from a phone or admin UI.
-5. List `/v1/audio/tracks?category=white_noise` and stream the returned URL.
+5. List `/v1/audio/tracks?category=song`, `story`, `classical`, or `white_noise`
+   and stream the returned URL. Classical entries are limited to Bach, Mozart,
+   Beethoven, and other public-domain or explicitly licensed works; the product
+   does not seed easy-listening arrangements such as Richard Clayderman albums.
 
 ## Deployment preparation (2026-10-01)
 
@@ -95,7 +99,7 @@ leading and trailing whitespace; the complete original Key is still required.
 
 Firmware uploads revisioned snapshots of its 32-record NVS ring. Stable sequences handle retry, reboot and undo; the server retains uploaded history after ring rollover. Previously overwritten records cannot be recovered, and prolonged offline use beyond ring capacity can lose unsynchronized entries. Uncalibrated timestamps are retained but excluded from dated statistics. Sleep intervals split at local midnight.
 
-Download device configuration to `main/xigua_backend_config_local.h` before building. Audio requires 12 kHz mono 16-bit PCM WAV, up to 25 MB. Playback status comes from device acknowledgments.
+Download device configuration to `main/xigua_backend_config_local.h` before building. Audio requires 12 kHz mono 16-bit PCM WAV, up to 25 MB. The device catalog includes songs, educational stories, classical early-learning music, and white noise. Playback status comes from device acknowledgments. `backend/seed-audio/manifest.json` records the content category and attribution for reproducible imports; run `backend/deploy/import_nursery.py` only after generating or supplying the listed WAV files.
 
 Deleted records move into recoverable storage and stop contributing to statistics and exports. Device/manual retries cannot resurrect them. Restore individual entries from the records page. Nursery catalog entries retain creator, source, license and format-conversion attribution.
 

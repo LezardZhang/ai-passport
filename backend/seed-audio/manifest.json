@@ -1,0 +1,77 @@
+[
+  {
+    "id": "story-little-ant-and-leaf",
+    "title": "小蚂蚁和一片叶子",
+    "category": "story",
+    "file": "story-little-ant-and-leaf.wav",
+    "attribution": {
+      "source_url": "https://wiki.librivox.org/index.php?title=Copyright_and_Public_Domain",
+      "creator": "西瓜育儿原创中文朗读（公版寓言改写）",
+      "license": "Public Domain Mark 1.0",
+      "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+      "changes": "原创中文改写并转换为 12 kHz 单声道 PCM WAV"
+    },
+    "sha256": "be16267f4ab213e59098ade5b7a14103f161375d892940cb62499850e1b271fd",
+    "duration_ms": 0
+  },
+  {
+    "id": "story-little-star-lost-way",
+    "title": "迷路的小星星",
+    "category": "story",
+    "file": "story-little-star-lost-way.wav",
+    "attribution": {
+      "source_url": "https://wiki.librivox.org/index.php?title=Copyright_and_Public_Domain",
+      "creator": "西瓜育儿原创中文朗读（公版寓言改写）",
+      "license": "Public Domain Mark 1.0",
+      "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+      "changes": "原创中文改写并转换为 12 kHz 单声道 PCM WAV"
+    },
+    "sha256": "be16267f4ab213e59098ade5b7a14103f161375d892940cb62499850e1b271fd",
+    "duration_ms": 0
+  },
+  {
+    "id": "classical-bach-c-major",
+    "title": "巴赫：C 大调前奏曲（早教合成版）",
+    "category": "classical",
+    "file": "classical-bach-c-major.wav",
+    "attribution": {
+      "source_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+      "creator": "西瓜育儿原创合成演奏；作曲：巴赫／莫扎特／贝多芬",
+      "license": "Public Domain Mark 1.0",
+      "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+      "changes": "公版作品主题的短篇原创合成编配，转换为 12 kHz 单声道 PCM WAV"
+    },
+    "sha256": "e5aee5a38876a9e3a1de2d10fd43385dc34dff47b368f8c9f29bf62e85bbc54e",
+    "duration_ms": 3680
+  },
+  {
+    "id": "classical-mozart-twinkle",
+    "title": "莫扎特：小星星主题（早教合成版）",
+    "category": "classical",
+    "file": "classical-mozart-twinkle.wav",
+    "attribution": {
+      "source_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+      "creator": "西瓜育儿原创合成演奏；作曲：巴赫／莫扎特／贝多芬",
+      "license": "Public Domain Mark 1.0",
+      "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+      "changes": "公版作品主题的短篇原创合成编配，转换为 12 kHz 单声道 PCM WAV"
+    },
+    "sha256": "7d6f15c73b2fd7e31f471298813774c5d743d0322846922ea6720595d9b19d9e",
+    "duration_ms": 6440
+  },
+  {
+    "id": "classical-beethoven-ode",
+    "title": "贝多芬：欢乐颂主题（早教合成版）",
+    "category": "classical",
+    "file": "classical-beethoven-ode.wav",
+    "attribution": {
+      "source_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+      "creator": "西瓜育儿原创合成演奏；作曲：巴赫／莫扎特／贝多芬",
+      "license": "Public Domain Mark 1.0",
+      "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+      "changes": "公版作品主题的短篇原创合成编配，转换为 12 kHz 单声道 PCM WAV"
+    },
+    "sha256": "c2cf153ffdcbbb37c1b20a15e51605f114ca5a9975d1188de0e8139381d9bf5c",
+    "duration_ms": 6900
+  }
+]

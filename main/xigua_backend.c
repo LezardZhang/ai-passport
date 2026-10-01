@@ -47,7 +47,7 @@ static void status_text(const char *text)
 void xigua_backend_status(char *out, size_t capacity)
 {
     if (!out || !capacity) return;
-    if (xigua_ai_backend_paused()) { snprintf(out,capacity,"儿歌已暂停"); return; }
+    if (xigua_ai_backend_paused()) { snprintf(out,capacity,"音频已暂停"); return; }
     if (s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
         snprintf(out, capacity, "%s", s_status);
         xSemaphoreGive(s_lock);
@@ -177,21 +177,27 @@ static void refresh_catalog(void)
     if (!tracks) return;
     size_t count=0;
     bool valid=true;
-    for (int white=0; white<2; ++white) {
-        char *data=request(white?"/v1/audio/tracks?category=white_noise":"/v1/audio/tracks?category=song",NULL);
+    static const char *const categories[] = { "song", "story", "classical", "white_noise" };
+    for (size_t category_index=0; category_index<sizeof(categories)/sizeof(categories[0]); ++category_index) {
+        char path[96];
+        snprintf(path,sizeof(path),"/v1/audio/tracks?category=%s",categories[category_index]);
+        char *data=request(path,NULL);
         if (!data) { valid=false; break; }
         cJSON *root=cJSON_Parse(data); free(data);
+        if (!root) { valid=false; break; }
         cJSON *items=cJSON_GetObjectItemCaseSensitive(root,"items"),*item;
-        if (!cJSON_IsArray(items)) valid=false;
+        if (!cJSON_IsArray(items)) { valid=false; cJSON_Delete(root); break; }
         cJSON_ArrayForEach(item,items) {
             cJSON *url=cJSON_GetObjectItemCaseSensitive(item,"play_url");
             cJSON *title=cJSON_GetObjectItemCaseSensitive(item,"title");
             cJSON *mime=cJSON_GetObjectItemCaseSensitive(item,"mime_type");
+            cJSON *category=cJSON_GetObjectItemCaseSensitive(item,"category");
             if (count==XIGUA_CATALOG_CAPACITY) break;
             if (!cJSON_IsString(url) || !cJSON_IsString(title) || !cJSON_IsString(mime) ||
                 strcmp(mime->valuestring,"audio/wav")) continue;
-            if (xigua_catalog_track(&tracks[count],XIGUA_BACKEND_URL,title->valuestring,
-                                    url->valuestring,mime->valuestring,white!=0)) ++count;
+            const char *label = cJSON_IsString(category) ? category->valuestring : categories[category_index];
+            if (xigua_catalog_track_category(&tracks[count],XIGUA_BACKEND_URL,title->valuestring,
+                                             url->valuestring,mime->valuestring,label)) ++count;
         }
         cJSON_Delete(root);
     }
@@ -203,18 +209,27 @@ static void refresh_catalog(void)
     } else status_text("音频目录读取失败");
     free(tracks);
 }
-size_t xigua_backend_catalog_item(size_t index,char *title,size_t capacity,bool *white)
+size_t xigua_backend_catalog_item_category(size_t index,char *title,size_t capacity,
+                                            char *category,size_t category_capacity)
 {
     size_t count=0;
     if (title && capacity) title[0]=0;
+    if (category && category_capacity) category[0]=0;
     if (s_lock && xSemaphoreTake(s_lock,pdMS_TO_TICKS(20))==pdTRUE) {
         count=s_catalog_count;
         if (index<count) {
             if (title && capacity) snprintf(title,capacity,"%s",s_catalog[index].title);
-            if (white) *white=s_catalog[index].white;
+            if (category && category_capacity) snprintf(category,category_capacity,"%s",s_catalog[index].category);
         }
         xSemaphoreGive(s_lock);
     }
+    return count;
+}
+size_t xigua_backend_catalog_item(size_t index,char *title,size_t capacity,bool *white)
+{
+    char category[XIGUA_CATALOG_CATEGORY_CAPACITY] = {0};
+    size_t count=xigua_backend_catalog_item_category(index,title,capacity,category,sizeof(category));
+    if (white) *white=!strcmp(category,"white_noise");
     return count;
 }
 void xigua_backend_refresh_catalog(void)

@@ -8,6 +8,8 @@ void xigua_backend_stop(void);
 bool xigua_backend_network_idle(void);
 /* Copies one cached entry and returns the current bounded catalog size. */
 size_t xigua_backend_catalog_item(size_t index, char *title, size_t capacity, bool *white_noise);
+size_t xigua_backend_catalog_item_category(size_t index, char *title, size_t capacity,
+                                            char *category, size_t category_capacity);
 void xigua_backend_refresh_catalog(void);
 void xigua_backend_play_track(size_t index);
 void xigua_backend_stop_sound(void);

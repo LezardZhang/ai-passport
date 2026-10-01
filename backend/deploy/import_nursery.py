@@ -1,4 +1,4 @@
-"""Import verified, attributed PCM nursery songs through the deployed admin API."""
+"""Import verified, attributed PCM nursery audio through the deployed admin API."""
 import hashlib
 import json
 from pathlib import Path
@@ -29,6 +29,7 @@ def main():
     manifest=json.loads((source/'manifest.json').read_text())
     existing={r['id']:r for r in request('/admin/api/audio/all')['items']}
     for item in manifest:
+        assert item.get('category') in {'song','story','classical','white_noise','other'}
         path=source/item['file']; data=path.read_bytes()
         assert hashlib.sha256(data).hexdigest()==item['sha256']
         with wave.open(str(path),'rb') as w:
@@ -38,7 +39,7 @@ def main():
             print(item['id']+': already imported');continue
         meta=request('/admin/api/audio/files','PUT',data)
         assert meta['sha256']==item['sha256']
-        track=request('/v1/audio/tracks','POST',{**meta,'id':item['id'],'title':item['title'],'category':'song'})
+        track=request('/v1/audio/tracks','POST',{**meta,'id':item['id'],'title':item['title'],'category':item['category']})
         request('/admin/api/audio/'+track['id'],'PATCH',item['attribution'])
         print(item['id']+': imported and attributed')
     # Replacement is reversible and occurs only after every new track is verified.

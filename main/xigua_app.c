@@ -11,6 +11,7 @@
 #include "xigua_menu.h"
 #include "xigua_sleep.h"
 #include "xigua_backend.h"
+#include "xigua_catalog.h"
 #include "xigua_cloud_state.h"
 #include "xigua_care.h"
 
@@ -290,7 +291,7 @@ static const char *const ACTIVE_NAMES[] = {
     "", "睡眠", "洗澡", "趴玩", "计时"
 };
 static const char *const HOME_ITEMS[] = {
-    "AI助手", "儿歌", "讲故事", "手动记录", "今天", "睡眠", "Wi-Fi配网", "设置",
+    "AI助手", "音频库", "讲故事", "手动记录", "今天", "睡眠", "Wi-Fi配网", "设置",
     "照护交接", "提醒"
 };
 
@@ -308,6 +309,14 @@ static bool valid_timer_minutes(uint16_t minutes)
         if (minutes == TIMER_OPTIONS[i]) return true;
     }
     return false;
+}
+
+static const char *audio_category_name(const char *category)
+{
+    if (!strcmp(category, "story")) return "益智故事";
+    if (!strcmp(category, "classical")) return "早教古典";
+    if (!strcmp(category, "white_noise")) return "白噪音";
+    return "儿歌";
 }
 
 static bool wall_clock_known(void)
@@ -1354,7 +1363,7 @@ static void wifi_ui_create_keyboard(void)
         int y = action ? 140 : 24 + (int)(slot / 6) * 22;
         lv_obj_t *key = make_label(s_wifi_keyboard, x, y, action ? 50 : 30,
                                    action ? 26 : 20, "", 0xFFFFFF,
-                                   action ? 14 : 16);
+                                   action ? 12 : 16);
         lv_obj_set_style_text_align(key, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_pad_top(key, 1, 0);
         lv_obj_set_style_bg_opa(key, LV_OPA_COVER, 0);
@@ -1398,8 +1407,12 @@ static void wifi_ui_render_keyboard(void)
             lv_label_set_text(key, value);
         }
         bool selected = index == s_wifi_keyboard_index;
-        bool mode = i >= XIGUA_KEYBOARD_PAGE_KEYS &&
-            i - XIGUA_KEYBOARD_PAGE_KEYS == (size_t)s_wifi_keyboard_mode;
+        size_t action = i >= XIGUA_KEYBOARD_PAGE_KEYS ?
+            i - XIGUA_KEYBOARD_PAGE_KEYS : XIGUA_KEYBOARD_ACTIONS;
+        bool mode = action == 0 &&
+            (s_wifi_keyboard_mode == X_WIFI_KEY_UPPER ||
+             s_wifi_keyboard_mode == X_WIFI_KEY_LOWER);
+        mode = mode || (action == 1 && s_wifi_keyboard_mode == X_WIFI_KEY_DIGIT_SYMBOL);
         lv_obj_set_style_bg_color(key, lv_color_hex(selected ? 0x69D2E7 :
                                                    mode ? 0x375B82 : 0x23405A), 0);
         lv_obj_set_style_text_color(key, lv_color_hex(selected ? 0x102332 : 0xFFFFFF), 0);
@@ -1715,15 +1728,14 @@ static void ui_refresh_page(void)
         text[0] = '\0';
         break;
     case X_PAGE_SOUND:
-        ui_set_title("儿歌/白噪音");
+        ui_set_title("音频库");
         {
-            char cloud_status[96], title[96];
-            bool white=false;
-            size_t count=xigua_backend_catalog_item(s_focus,title,sizeof(title),&white);
+            char cloud_status[96], title[96], category[XIGUA_CATALOG_CATEGORY_CAPACITY];
+            size_t count=xigua_backend_catalog_item_category(s_focus,title,sizeof(title),category,sizeof(category));
             if (s_focus>=count+3) s_focus=count+2;
             xigua_backend_status(cloud_status, sizeof(cloud_status));
             if (s_focus<count) snprintf(text,sizeof(text),"%s %u/%u\n\n%s\n\n%s",
-                white?"白噪音":"儿歌",(unsigned)(s_focus+1),(unsigned)count,title,cloud_status);
+                audio_category_name(category),(unsigned)(s_focus+1),(unsigned)count,title,cloud_status);
             else snprintf(text,sizeof(text),"%s\n\n%s",
                 s_focus==count?(xigua_ai_backend_paused()?"继续":"暂停"):s_focus==count+1?"停止":"刷新",cloud_status);
         }

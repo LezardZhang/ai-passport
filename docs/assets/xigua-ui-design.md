@@ -211,8 +211,10 @@ remains for compatibility. Story mode uses the dedicated `mimo-v2.5-tts` stream,
 decodes each `delta.audio.data` Base64 chunk as 24 kHz 16-bit mono PCM, and sends
 it through the filtered 12 kHz BSP audio worker path; ordinary AI replies remain
 text-only for now.
-Songs is the second home entry, visible on the first three-card page. The cloud
-catalog caches at most 16 song/white-noise tracks. UP/DOWN selects a title or the
+Audio library is the second home entry, visible on the first three-card page. The cloud
+catalog caches at most 16 song, educational-story, classical-early-learning, or
+white-noise tracks. Each item keeps its category label so the device can distinguish
+儿歌, 益智故事, 早教古典, and 白噪音 while browsing. UP/DOWN selects a title or the
 Pause/Resume, Stop, and Refresh controls; OK activates the selection. Canonical
 12 kHz, 16-bit mono WAV is validated before PCM playback on the shared AI worker.
 Pause saves the emitted PCM byte position, closes HTTP, sleeps the codec, and
