@@ -20,6 +20,14 @@ typedef struct {
     bool paused;
 } x_ai_ui_t;
 
+/* A shared reader may retain text only within the same function. */
+static inline bool x_ai_enter_mode(x_ai_ui_t *ui, bool story)
+{
+    if (ui->story_reply == story) return false;
+    *ui = (x_ai_ui_t){ .view = X_AI_READY, .pages = 1, .story_reply = story };
+    return true;
+}
+
 static inline size_t x_ai_page_count(size_t height, size_t viewport)
 {
     return height && viewport ? 1 + (height - 1) / viewport : 1;

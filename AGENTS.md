@@ -30,6 +30,7 @@ still require their own authorization.
 ## Project and safety baseline
 
 - Target: ESP32-C3, 8 MB Flash, no PSRAM, ESP-IDF 5.5.3.
+- Resource-affecting changes must follow the [memory budget rules](docs/development/engineering/memory-budget.md) and update the application's allocation/phase budget. Account for preparation through cleanup, permitted concurrency, suitable contiguous blocks and measured reserves; a successful build does not prove runtime capacity.
 - Keep the repository's default partition table minimal: NVS, PHY data, and
   one factory application spanning the rest of the 8 MB Flash. User firmware
   may deliberately change this layout; validate the resulting table and do not
@@ -54,6 +55,7 @@ still require their own authorization.
 | Any code change | `docs/development/ai-guide.md`, relevant headers and neighboring implementation |
 | Application workflow or core skill setup | `skills/README.md`; ensure the five required skills are available, then use only the matching skill |
 | Environment bootstrap or missing toolchain | `docs/development/engineering/environment-setup.md` |
+| Memory, buffers, queues, stacks, caches, audio/network/radio concurrency, assets or resource-affecting dependencies | `docs/development/engineering/memory-budget.md`, the application's current resource budget (Xigua: `docs/assets/xigua-memory-budget.md`) |
 | BSP, pins, buses, display, audio, battery | `docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md`, `components/bsp/include/bsp_pins.h` |
 | Demo or menu | `main/demo.h`, `main/main.c`, the nearest `main/demo_*.c` implementation |
 | Chinese UI text or fonts | `docs/development/engineering/lvgl-chinese-fonts.md`, the application's font assets, configuration, and widget styles |

@@ -30,8 +30,8 @@ def main() -> None:
     assert 'tts_playback_task' in SOURCE
     assert 'xigua_adpcm_encode' in SOURCE and 'xigua_adpcm_decode' in SOURCE
     assert 'xigua_tts_downsample_push' in SOURCE
-    tts = SOURCE.split('static esp_err_t tts_stream', 1)[1].split('static esp_err_t record_voice', 1)[0]
-    assert tts.index('esp_http_client_fetch_headers') < tts.index('xTaskCreate(tts_playback_task')
+    # Real resource ordering, failed downloads and cache replay are exercised
+    # by test_xigua_tts_memory.py; the worker controls by test_xigua_tts_pause.py.
     assert 'xigua_tts_cache_publish' in SOURCE
     assert 'xigua_tts_cache_advance' in SOURCE
     assert 'tts_play_cached' in SOURCE

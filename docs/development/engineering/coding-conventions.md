@@ -13,7 +13,7 @@
 - Document non-trivial functions, state, ownership, blocking behavior, task context, initialization order, failure values, register choices, timing, synchronization, and hardware-specific constants. Explain why, not merely what.
 - Add or update tests with code changes. If automation is not practical, record the test gap and exact manual validation path.
 - If adding a cache, define expiration and cleanup unless durable retention is explicitly justified.
-- The ESP32-C3 has no PSRAM. Review internal RAM and largest-contiguous-block impact before increasing LVGL buffers, audio allocations, network state, or task stacks.
+- The ESP32-C3 has no PSRAM. Follow the [memory budget rules](memory-budget.md) before changing buffers, queues, caches, audio/network lifetimes or stacks. Keep the application ledger, phase concurrency, allocation limits, cleanup and measured headroom aligned with code.
 - **Watch power consumption.** This is a wearable powered by a small battery; keep it efficient. Avoid keeping the screen lit for long periods: dim or turn off the backlight, and return to a low-power state (light/deep sleep) whenever the screen is idle, so the device is not left displaying a bright screen while doing nothing. See the guidance on sleep in [`../hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md`](../../hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md).
 
 ## Chinese fonts and missing glyphs

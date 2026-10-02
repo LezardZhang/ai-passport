@@ -209,11 +209,13 @@ provide reference material. Choose the entry that matches your task.
 | [AI skills](../skills/README.md) | Development, environment setup, builds, device testing, and debugging |
 | [Hardware](hardware-design/README.md) | Board facts, interface boundaries, acceptance checklists, and troubleshooting |
 | [Chinese fonts](development/engineering/lvgl-chinese-fonts.md) | Glyph coverage, widget font selection, and blank-text troubleshooting |
+| [Memory budget rules](development/engineering/memory-budget.md) | Allocation ownership, phase concurrency, RAM/Flash reserves and device acceptance |
 | [Wi-Fi provisioning](development/engineering/wifi-provisioning.md) | Bluetooth provisioning reference and companion mini program |
 | [Community projects and experience](reference/README.md) | Playbooks and reusable knowledge under `docs/reference/<username>/` |
 | [Xigua Assistant proposal](assets/xigua-implementation-plan.md) | Fork-specific childcare assistant scope, architecture, milestones, and acceptance |
 | [Xigua UI design](assets/xigua-ui-design.md) | Page responsibilities, record flows, three-button actions, and service handoff |
 | [Xigua project handoff](assets/xigua-project-handoff.md) | Current implementation, verification evidence, open issues, and takeover steps |
+| [Xigua resource budget](assets/xigua-memory-budget.md) | Current allocation ledger, phase schedule, planning margins and unresolved capacity gaps |
 | [Xigua childcare backend](../backend/README.md) | Docker deployment, admin console, event API, audio catalogue, and Hermes integration |
 | [Contributing](contribution/README.md) | Documentation, commits, and pull-request conventions |
 | [Brand assets](brand/README.md) | Product visual references and [brand language](brand/brand-and-product.md) |

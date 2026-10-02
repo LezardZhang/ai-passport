@@ -23,6 +23,7 @@ static uint8_t registers[256];
 static int fail_reg = -1, fail_value = -1, fail_writes;
 static int fail_tx_fmt, fail_rx_fmt, fail_tx_enable, fail_rx_enable;
 static int fail_codec_delete;
+static int fail_channel_delete;
 static bool tx_data_enabled, rx_data_enabled;
 static unsigned codec_creations, codec_starts, ctrl_creations, ctrl_deletions;
 static bool read_reg0e_reserved_zero;
@@ -102,6 +103,10 @@ esp_err_t i2s_channel_disable(i2s_chan_handle_t channel) {
 }
 esp_err_t i2s_del_channel(i2s_chan_handle_t channel) {
     assert(!channel->running);
+    if (channel == &rx_channel && fail_channel_delete) {
+        --fail_channel_delete;
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 
@@ -274,6 +279,26 @@ static void assert_active(void) {
 }
 
 int main(void) {
+    // Releasing idle audio must retire DMA channels and allow a fresh capture.
+    assert(bsp_audio_init() == ESP_OK);
+    assert(bsp_audio_set_format(16000, 16, 1) == ESP_OK);
+    bsp_audio_set_volume(65);
+    assert(bsp_audio_release() == ESP_OK);
+    assert(s_volume == 65);
+    assert(!s_initialized && !s_tx && !s_rx && !s_ctrl && !s_data);
+    assert(bsp_audio_release() == ESP_OK);
+    assert(bsp_audio_init() == ESP_OK);
+    assert(bsp_audio_set_format(16000, 16, 1) == ESP_OK);
+    assert_active();
+    fail_channel_delete = 1;
+    assert(bsp_audio_release() != ESP_OK);
+    assert(!s_initialized && s_rx && !s_tx);
+    assert(bsp_audio_init() == ESP_ERR_INVALID_STATE);
+    assert(bsp_audio_release() == ESP_OK);
+    assert(bsp_audio_init() == ESP_OK);
+    assert(bsp_audio_set_format(16000, 16, 1) == ESP_OK);
+    assert_active();
+    audio_cleanup();
     assert(!s_initialized);
     assert(bsp_audio_wake()==ESP_OK);
     assert(bsp_audio_set_format(12000,16,1)==ESP_ERR_INVALID_STATE);

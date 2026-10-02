@@ -12,6 +12,9 @@ void xigua_app_exit(void);
 esp_err_t xigua_app_start(void);
 esp_err_t xigua_app_stop(void);
 void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev);
+/* Clear the persisted local event ring after an administrative cloud clear.
+ * Device settings and an unfinished active session are preserved. */
+esp_err_t xigua_app_clear_local_records(void);
 
 // Called by the voice/network worker after a model returns JSON.
 // An optional root command_id makes retries idempotent when it is reused for

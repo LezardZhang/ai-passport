@@ -270,10 +270,18 @@ def restore_record(record_id: str):
 @router.post('/admin/api/records/clear',dependencies=[ADMIN])
 def clear_records():
     child,_=ids()
+    now=m.utc_now(); ident=str(uuid.uuid4())
     with m.get_db() as db:
         rows=db.execute('SELECT * FROM events WHERE child_id=?',(child,)).fetchall()
         count=archive_records(db,rows)
-    return {'deleted':count,'recoverable':True}
+        # Clearing the web records must clear the device ring as well.  Treat
+        # this as a high-priority command so the next snapshot cannot restore
+        # records that the administrator just archived.
+        db.execute("UPDATE device_commands SET status='superseded',updated_at=? "
+                   "WHERE status IN ('queued','received')",(now,))
+        db.execute('INSERT INTO device_commands VALUES(?,?,?,?,?,?,NULL)',
+                   (ident,'clear_records',None,'queued',now,now))
+    return {'deleted':count,'recoverable':True,'device_command_id':ident}
 
 
 @router.get('/admin/api/statistics',dependencies=[ADMIN])

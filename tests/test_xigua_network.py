@@ -37,24 +37,28 @@ static bool xigua_ble_active(void) {return false;}
 static void enter(void) {assert(++occupied==1); if(occupied>peak)peak=occupied;delay();}
 static void leave(void) {assert(occupied==1);--occupied;}
 static char *request_internal(const char *p,const char *b) {(void)p;(void)b;enter();++cloud_calls;leave();return (char *)"ok";}
-static esp_err_t post_json_internal(const char *p,char *r,size_t n,size_t b) {(void)p;(void)r;(void)n;(void)b;enter();++model_calls;leave();return 3;}
-static bool probe_public_https_internal(void) {enter();leave();return false;}
+static esp_err_t post_json_internal(char **p,char *r,size_t n,size_t b) {(void)p;(void)r;(void)n;(void)b;enter();++model_calls;leave();return 3;}
 static esp_err_t asr_stream_internal(size_t w,char *r,size_t n) {(void)w;(void)r;(void)n;enter();leave();return 3;}
+static const char s_system_prompt[]="test";
+static bool health_care_context;
+static esp_err_t request_once_sized_prompt(const char *p,const char *s,char *r,size_t n,size_t b,bool care) {
+ (void)p;(void)s;(void)r;(void)n;(void)b;health_care_context=care;return 3;
+}
 '''
 CASES = r'''
 static void *cloud(void *p) {(void)p;for(int i=0;i<100;++i){request("/snapshot",NULL);delay();}return NULL;}
-static void *model(void *p) {(void)p;for(int i=0;i<30;++i)assert(post_json("{}",NULL,0,0)==3);return NULL;}
+static void *model(void *p) {(void)p;char *body=(char *)"{}";for(int i=0;i<30;++i)assert(post_json(&body,NULL,0,0)==3);return NULL;}
 int main(void) {
  fail_create=1;assert(xigua_network_init()==2);assert(!xigua_network_take(0));
  fail_create=0;assert(!xigua_network_init());assert(!xigua_network_init());
  assert(xigua_network_take(0));assert(!request("/snapshot",NULL));
- assert(post_json("{}",NULL,0,0)==1);assert(!probe_public_https());assert(asr_stream(0,NULL,0)==1);
+ char *body=(char *)"{}";assert(post_json(&body,NULL,0,0)==1);assert(asr_stream(0,NULL,0)==1);
  xigua_network_give();
- assert(!probe_public_https());assert(xigua_network_take(0));xigua_network_give();
  assert(asr_stream(0,NULL,0)==3);assert(xigua_network_take(0));xigua_network_give();
  pthread_t a,b;assert(!pthread_create(&a,NULL,cloud,NULL));assert(!pthread_create(&b,NULL,model,NULL));
  pthread_join(a,NULL);pthread_join(b,NULL);
  assert(peak==1&&!occupied&&!s_http_busy&&cloud_calls>0&&model_calls==30);
+ assert(request_once_sized("only OK",NULL,0,2048)==3 && health_care_context);
  puts("HTTP/ASR exclusion, nonblocking cloud deferral and error/timeout lock release: PASS");
 }
 '''
@@ -63,7 +67,7 @@ with tempfile.TemporaryDirectory(prefix='xigua-network-') as folder:
     (path/'esp_err.h').write_text('typedef int esp_err_t;\n#define ESP_OK 0\n#define ESP_ERR_TIMEOUT 1\n#define ESP_ERR_NO_MEM 2\n')
     (path/'freertos/FreeRTOS.h').write_text('#define pdTRUE 1\n#define pdMS_TO_TICKS(x) ((x)/1000)\n')
     (path/'freertos/semphr.h').write_text('typedef void *SemaphoreHandle_t;\nvoid *xSemaphoreCreateMutex(void);\nint xSemaphoreTake(void *,unsigned);\nvoid xSemaphoreGive(void *);\n')
-    wrappers='\n'.join([function(AI,n) for n in ['post_json','probe_public_https','asr_stream']]+[function(CLOUD,'request')])
+    wrappers='\n'.join([function(AI,n) for n in ['post_json','asr_stream','request_once_sized']]+[function(CLOUD,'request')])
     (path/'test.c').write_text(HARNESS+wrappers+CASES)
     subprocess.run([os.environ.get('CC','cc'),'-std=c11','-Wall','-Wextra','-Werror','-pthread',
                     '-I'+str(path),'-I'+str(ROOT/'main'),str(path/'test.c'),str(ROOT/'main/xigua_network.c'),'-o',str(path/'test')],check=True)

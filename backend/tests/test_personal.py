@@ -126,7 +126,14 @@ def test_delete_restore_and_device_resync(client):
     assert client.get(P+'/admin/api/trash').json()['total']==1
     assert client.post(P+'/admin/api/trash/'+ident+'/restore').status_code==200
     assert client.get(P+'/admin/api/personal').json()['totals']['records']==2
-    assert client.post(P+'/admin/api/records/clear').json()['deleted']==2
+    cleared=client.post(P+'/admin/api/records/clear').json()
+    assert cleared['deleted']==2
+    assert cleared['device_command_id']
+    command=client.get(P+'/v1/device/command',headers=h).json()['command']
+    assert command['id']==cleared['device_command_id']
+    assert command['action']=='clear_records'
+    assert client.post(P+'/v1/device/command/'+command['id'],headers=h,
+                       json={'status':'complete'}).json()['accepted']
     assert client.post(P+'/v1/device/snapshot',json=snap(3,[event(1),event(2)]),headers=h).status_code==200
     assert client.get(P+'/admin/api/personal').json()['totals']['records']==0
     assert client.get(P+'/admin/api/trash').json()['total']==2

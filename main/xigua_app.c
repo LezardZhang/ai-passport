@@ -241,6 +241,7 @@ static x_ai_ui_t s_ai_ui = { .view = X_AI_READY, .pages = 1 };
 static int64_t s_ai_record_started_us;
 static bool s_ai_request_pending;
 static bool s_ai_pending_story;
+static x_page_t s_ai_audio_page = X_PAGE_VOICE;
 static char s_ai_audio_status[64];
 static char s_last_command_id[X_COMMAND_ID_MAX];
 static x_undo_t s_undo;
@@ -328,7 +329,9 @@ static void state_defaults(void)
 {
     memset(&s_state, 0, sizeof(s_state));
     s_state.data.magic = X_STATE_MAGIC;
-    s_state.data.milk_ml = 150;
+    /* An empty record set has no meaningful last amount.  The manual-feed
+     * editor supplies its own 150 ml starting value when there is no record. */
+    s_state.data.milk_ml = 0;
     s_state.data.milk_ingredient = 0;
     s_state.data.brightness = 80;
     s_state.data.timezone_index = 0;
@@ -376,6 +379,52 @@ static esp_err_t state_save_command_id(const char *command_id)
 static void state_save(void)
 {
     (void)state_save_command_id(NULL);
+}
+
+esp_err_t xigua_app_clear_local_records(void)
+{
+    if (!s_nvs_open || !s_mutex) return ESP_ERR_INVALID_STATE;
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(500)) != pdTRUE) return ESP_ERR_TIMEOUT;
+
+    x_persisted_t before = s_state.data;
+    x_sleep_times_t before_sleep_times = s_state.sleep_times;
+    uint64_t before_cloud_ids[X_EVENT_CAPACITY];
+    memcpy(before_cloud_ids, s_state.cloud_ids, sizeof(before_cloud_ids));
+
+    /* Keep settings and an unfinished active session intact.  Everything that
+     * contributes to historical statistics is reset, including the ring and
+     * the legacy aggregate counters used by older state blobs. */
+    uint8_t brightness = s_state.data.brightness;
+    uint8_t timezone_index = s_state.data.timezone_index;
+    uint8_t active = s_state.data.active;
+    uint16_t timer_minutes = s_state.data.timer_minutes;
+    int64_t active_sleep_start = active == X_ACTIVE_SLEEP ? s_state.data.sleep_start_epoch : 0;
+    memset(&s_state.data, 0, sizeof(s_state.data));
+    s_state.data.magic = X_STATE_MAGIC;
+    s_state.data.brightness = brightness;
+    s_state.data.timezone_index = timezone_index;
+    s_state.data.active = active;
+    s_state.data.timer_minutes = timer_minutes;
+    s_state.data.sleep_start_epoch = active_sleep_start;
+    memset(&s_state.sleep_times, 0, sizeof(s_state.sleep_times));
+    memset(s_state.cloud_ids, 0, sizeof(s_state.cloud_ids));
+    s_pending_edit.valid = false;
+    s_undo.valid = false;
+    s_feed_ml = 150;
+    s_feed_ingredient = 0;
+
+    esp_err_t err = state_save_locked(NULL);
+    if (err != ESP_OK) {
+        s_state.data = before;
+        s_state.sleep_times = before_sleep_times;
+        memcpy(s_state.cloud_ids, before_cloud_ids, sizeof(s_state.cloud_ids));
+    }
+    xSemaphoreGive(s_mutex);
+    if (err == ESP_OK) {
+        snprintf(s_feedback, sizeof(s_feedback), "本地记录已清除");
+        ESP_LOGI(TAG, "local records cleared by cloud command");
+    }
+    return err;
 }
 
 static void load_last_command_id(void)
@@ -1034,7 +1083,11 @@ static void state_load(void)
         }
         if ((new_valid || legacy_valid) && data.magic == X_STATE_MAGIC) {
             s_state.data = data;
-            if (s_state.data.milk_ml < 10 || s_state.data.milk_ml > 400) s_state.data.milk_ml = 150;
+            if (s_state.data.milk_count == 0) {
+                s_state.data.milk_ml = 0;
+            } else if (s_state.data.milk_ml < 10 || s_state.data.milk_ml > 400) {
+                s_state.data.milk_ml = 150;
+            }
             if (s_state.data.brightness < 20 || s_state.data.brightness > 100) s_state.data.brightness = 80;
             if (s_state.data.timezone_index >= sizeof(TIMEZONE_VALUES) / sizeof(TIMEZONE_VALUES[0])) {
                 s_state.data.timezone_index = 0;
@@ -1311,7 +1364,7 @@ static void ui_refresh_top_bar(void)
             network = "联网失败"; color = 0xFFBE79; break;
         case XIGUA_AI_HEALTH_READY:
         case XIGUA_AI_HEALTH_MODEL_FAILED:
-            /* A model failure does not invalidate a successful HTTPS probe. */
+            /* Wi-Fi has an IP; a model failure is reported on the settings page. */
             network = "已联网"; color = 0x91D8A6; break;
         default: break;
         }
@@ -1422,6 +1475,23 @@ static void wifi_ui_render_keyboard(void)
     }
 }
 
+static void ui_ai_enter_mode(bool story)
+{
+    if (!x_ai_enter_mode(&s_ai_ui, story)) return;
+    s_ai_reply[0] = s_ai_error[0] = s_ai_audio_status[0] = '\0';
+    s_ai_truncated = false;
+    s_ai_rendered_view = (x_ai_view_t)-1;
+}
+
+static void ui_ai_sync_audio(void)
+{
+    bool ours = s_ai_audio_page == s_page &&
+                (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY);
+    xigua_ai_voice_phase_t phase = xigua_ai_voice_phase();
+    s_ai_ui.paused = ours && phase == XIGUA_AI_VOICE_PAUSED;
+    s_ai_ui.speaking = ours && (s_ai_ui.paused || phase == XIGUA_AI_VOICE_SPEAKING);
+}
+
 static bool ai_request_voice_current_mode(void)
 {
     if (!xigua_ai_configured()) {
@@ -1448,6 +1518,7 @@ static bool ai_request_voice_current_mode(void)
     }
     s_ai_request_pending = true;
     s_ai_pending_story = s_page == X_PAGE_STORY;
+    s_ai_audio_page = s_page;
     s_ai_audio_status[0] = '\0';
     s_ai_record_started_us = esp_timer_get_time();
     snprintf(s_feedback, sizeof(s_feedback), "正在录音，松开确认键结束（最长60秒）");
@@ -1472,7 +1543,8 @@ static void ui_menu_focus(lv_obj_t *card, bool selected)
     lv_obj_set_style_outline_color(card, lv_color_hex(0xFFFFFF), 0);
 }
 
-static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper, bool sleeping,
+static void ui_home_render(uint32_t milk_total, uint16_t feed_count, uint16_t sleep,
+                            unsigned diaper, bool sleeping,
                             int64_t sleep_start)
 {
     if (!s_home_panel) {
@@ -1485,12 +1557,23 @@ static void ui_home_render(uint16_t milk_ml, uint16_t sleep, unsigned diaper, bo
         for (size_t i = 0; i < 3; ++i) s_home_cards[i] = ui_menu_card(s_home_panel, 54 + (int)i * 44);
     }
     lv_obj_add_flag(s_body, LV_OBJ_FLAG_HIDDEN);
-    if (sleeping) {
+    if (feed_count == 0) {
+        if (sleeping) {
+            char start[20];
+            lv_label_set_text_fmt(s_home_summary, "暂无喂奶记录\n开始 %s",
+                                 format_sleep_time(sleep_start, start, sizeof(start)));
+        } else {
+            lv_label_set_text_fmt(s_home_summary, "暂无喂奶记录\n睡眠 %u 次  尿便 %u 次",
+                                 sleep, diaper);
+        }
+    } else if (sleeping) {
         char start[20];
-        lv_label_set_text_fmt(s_home_summary, "奶量 %u 毫升\n开始 %s", milk_ml,
+        lv_label_set_text_fmt(s_home_summary, "今日奶量 %lu 毫升\n开始 %s",
+                             (unsigned long)milk_total,
                              format_sleep_time(sleep_start, start, sizeof(start)));
     }
-    else lv_label_set_text_fmt(s_home_summary, "奶量 %u 毫升\n睡眠 %u 次  尿便 %u 次", milk_ml, sleep, diaper);
+    else lv_label_set_text_fmt(s_home_summary, "今日奶量 %lu 毫升\n睡眠 %u 次  尿便 %u 次",
+                               (unsigned long)milk_total, sleep, diaper);
     size_t first = xigua_menu_first(s_focus, 3);
     for (size_t i = 0; i < 3; ++i) {
         if (first + i >= sizeof(HOME_ITEMS) / sizeof(HOME_ITEMS[0])) {
@@ -1668,9 +1751,14 @@ static void ui_refresh_page(void)
     case X_PAGE_OVERVIEW:
         ui_set_title("西瓜助手");
         {
-            snprintf(text, sizeof(text), "> %s\n\n奶量 %u 毫升（%u 次）\n睡眠 %u 次  尿便 %u 次\n进行中：%s",
+            const char *milk_summary = feed_count == 0 ? "暂无喂奶记录" : "今日奶量";
+            if (feed_count == 0) snprintf(text, sizeof(text), "> %s\n\n%s\n睡眠 %u 次  尿便 %u 次\n进行中：%s",
+                 HOME_ITEMS[s_focus], milk_summary,
+                 sleep_count, (unsigned)(pee_count + poop_count),
+                 snapshot.data.active == X_ACTIVE_NONE ? "无" : active_name((x_active_t)snapshot.data.active));
+            else snprintf(text, sizeof(text), "> %s\n\n%s %lu 毫升（%u 次）\n睡眠 %u 次  尿便 %u 次\n进行中：%s",
                  HOME_ITEMS[s_focus],
-                 snapshot.data.milk_ml, feed_count,
+                 milk_summary, (unsigned long)milk_total, feed_count,
                  sleep_count, (unsigned)(pee_count + poop_count),
                  snapshot.data.active == X_ACTIVE_NONE ? "无" : active_name((x_active_t)snapshot.data.active));
         }
@@ -1685,12 +1773,12 @@ static void ui_refresh_page(void)
         break;
     case X_PAGE_FEED:
         ui_set_title("喂养");
-        snprintf(text, sizeof(text), "%s\n\n%u 毫升\n\n上次：%s %u 毫升  %s",
+        snprintf(text, sizeof(text), "%s\n\n%u 毫升\n\n上次：%s",
                  FEED_INGREDIENTS[s_feed_ingredient],
                  (unsigned)s_feed_ml,
-                 FEED_INGREDIENTS[snapshot.data.milk_ingredient],
-                 (unsigned)snapshot.data.milk_ml,
-                 format_clock(snapshot.data.last_milk_epoch, last_clock, sizeof(last_clock)));
+                 snapshot.data.last_milk_epoch >= X_MIN_VALID_EPOCH ?
+                     format_clock(snapshot.data.last_milk_epoch, last_clock, sizeof(last_clock)) :
+                     "暂无记录");
         ui_set_hint("上键减量  下键加量  长按上键选食材  确认键保存");
         break;
     case X_PAGE_DIAPER:
@@ -1899,7 +1987,7 @@ static void ui_refresh_page(void)
     } else if (s_care_panel) {
         lv_obj_delete(s_care_panel); s_care_panel = s_care_text = NULL;
     }
-    if (s_page == X_PAGE_OVERVIEW) ui_home_render(snapshot.data.milk_ml, sleep_count,
+    if (s_page == X_PAGE_OVERVIEW) ui_home_render(milk_total, feed_count, sleep_count,
         (unsigned)(pee_count + poop_count), xigua_sleep_running(snapshot.data.sleep_end_epoch),
         snapshot.data.sleep_start_epoch);
     else if (s_home_panel) {
@@ -1943,7 +2031,8 @@ static void ui_timer_cb(lv_timer_t *timer)
                                         s_wifi_ui_mode == X_WIFI_UI_MENU ||
                                         s_wifi_ui_mode == X_WIFI_UI_SCAN ||
                                         s_wifi_ui_mode == X_WIFI_UI_BLE))) ui_refresh_page();
-    if (s_ai_request_pending && (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY)) {
+    if (s_ai_request_pending && s_ai_pending_story == s_ai_ui.story_reply &&
+        (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY)) {
         switch (xigua_ai_voice_phase()) {
         case XIGUA_AI_VOICE_RECORDING:
             snprintf(s_feedback, sizeof(s_feedback), "正在录音，松开确认键结束（最长60秒）");
@@ -1967,36 +2056,37 @@ static void ui_timer_cb(lv_timer_t *timer)
     esp_err_t ai_error = ESP_FAIL;
     bool truncated = false;
     bool audio_failed = false;
+    bool matching_mode = false;
     if (xigua_ai_take_text(s_ai_reply, sizeof(s_ai_reply), &ai_error, &truncated,
-                           &audio_failed)) {
+                           &audio_failed, s_ai_ui.story_reply, &matching_mode)) {
         s_ai_request_pending = false;
-        if (ai_error == ESP_OK) {
-            s_ai_truncated = truncated;
-            s_ai_ui.story_reply = s_ai_pending_story;
-            s_ai_ui.paused = xigua_ai_voice_phase() == XIGUA_AI_VOICE_PAUSED;
-            s_ai_ui.speaking = s_ai_ui.paused || xigua_ai_voice_phase() == XIGUA_AI_VOICE_SPEAKING;
-            s_ai_rendered_view = (x_ai_view_t)-1;
-        } else snprintf(s_ai_error, sizeof(s_ai_error), "%s", esp_err_to_name(ai_error));
-        x_ai_complete(&s_ai_ui, ai_error == ESP_OK);
-        snprintf(s_feedback, sizeof(s_feedback), ai_error != ESP_OK ? "Mimo 请求失败" :
-                 audio_failed ? "故事文字已收到，语音播放失败" : "Mimo 回复已收到");
-        if (ai_error == ESP_OK && ui_take_voice_undo()) {
-            snprintf(s_feedback, sizeof(s_feedback), "AI记录已保存");
+        if (matching_mode) {
+            if (ai_error == ESP_OK) {
+                s_ai_truncated = truncated;
+                ui_ai_sync_audio();
+                s_ai_rendered_view = (x_ai_view_t)-1;
+            } else snprintf(s_ai_error, sizeof(s_ai_error), "%s", esp_err_to_name(ai_error));
+            x_ai_complete(&s_ai_ui, ai_error == ESP_OK);
+            snprintf(s_feedback, sizeof(s_feedback), ai_error != ESP_OK ? "Mimo 请求失败" :
+                     audio_failed ? "故事文字已收到，语音播放失败" : "Mimo 回复已收到");
+            if (ai_error == ESP_OK && ui_take_voice_undo()) {
+                snprintf(s_feedback, sizeof(s_feedback), "AI记录已保存");
+            }
+            if (ai_error == ESP_OK && s_pending_edit.valid && s_page == X_PAGE_VOICE) {
+                s_page = X_PAGE_CONFIRM_EDIT; s_focus = 0;
+                snprintf(s_feedback, sizeof(s_feedback), "尚未修改原记录");
+            }
+            else if (s_pending_edit.valid && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                s_pending_edit.valid = false;
+                xSemaphoreGive(s_mutex);
+            }
+            ui_refresh_page();
         }
-        if (ai_error == ESP_OK && s_pending_edit.valid && s_page == X_PAGE_VOICE) {
-            s_page = X_PAGE_CONFIRM_EDIT; s_focus = 0;
-            snprintf(s_feedback, sizeof(s_feedback), "尚未修改原记录");
-        }
-        else if (s_pending_edit.valid && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            s_pending_edit.valid = false;
-            xSemaphoreGive(s_mutex);
-        }
-        ui_refresh_page();
     }
     xigua_ai_audio_state_t audio_state;
-    if (xigua_ai_take_audio_state(&audio_state)) {
-        s_ai_ui.paused = xigua_ai_voice_phase() == XIGUA_AI_VOICE_PAUSED;
-        s_ai_ui.speaking = s_ai_ui.paused || xigua_ai_voice_phase() == XIGUA_AI_VOICE_SPEAKING;
+    if (xigua_ai_take_audio_state(&audio_state) && s_ai_audio_page == s_page &&
+        (s_page == X_PAGE_VOICE || s_page == X_PAGE_STORY)) {
+        ui_ai_sync_audio();
         snprintf(s_ai_audio_status, sizeof(s_ai_audio_status), "%s",
                  audio_state == XIGUA_AI_AUDIO_PLAYING ? "正在朗读" :
                  audio_state == XIGUA_AI_AUDIO_PAUSED ? "已暂停朗读" :
@@ -2026,7 +2116,10 @@ static void go_page(x_page_t page, size_t focus)
                 snprintf(s_handoff_view + used, sizeof(s_handoff_view) - used, "尚未取得云端数据");
         }
     }
-    if (page==X_PAGE_VOICE || page==X_PAGE_STORY) xigua_backend_stop_sound();
+    if (page==X_PAGE_VOICE || page==X_PAGE_STORY) {
+        xigua_backend_stop_sound();
+        ui_ai_enter_mode(page == X_PAGE_STORY);
+    }
     s_page = page;
     s_focus = focus;
     s_confirm_abort = false;
@@ -2234,7 +2327,8 @@ esp_err_t xigua_app_start(void)
     apply_timezone();
     s_state.battery_soc = bsp_battery_soc();
     bsp_display_backlight(s_state.data.brightness);
-    s_feed_ml = s_state.data.milk_ml;
+    s_feed_ml = s_state.data.milk_ml >= 10 && s_state.data.milk_ml <= 400 ?
+        s_state.data.milk_ml : 150;
     s_feed_ingredient = s_state.data.milk_ingredient;
     s_timer_focus = 0;
     s_focus = 0;
@@ -2320,9 +2414,11 @@ esp_err_t xigua_app_ai_response(const char *json)
     cJSON *reply = cJSON_GetObjectItemCaseSensitive(root, "reply_text");
     if (!cJSON_IsString(reply)) reply = cJSON_GetObjectItemCaseSensitive(root, "tts_text");
     if (cJSON_IsString(reply) && reply->valuestring) {
-        s_ai_truncated = xigua_text_copy(s_ai_reply, sizeof(s_ai_reply), reply->valuestring);
-        x_ai_complete(&s_ai_ui, true);
-        s_ai_rendered_view = (x_ai_view_t)-1;
+        if (!s_ai_ui.story_reply) {
+            s_ai_truncated = xigua_text_copy(s_ai_reply, sizeof(s_ai_reply), reply->valuestring);
+            x_ai_complete(&s_ai_ui, true);
+            s_ai_rendered_view = (x_ai_view_t)-1;
+        }
         snprintf(s_feedback, sizeof(s_feedback), "%s", cJSON_IsString(
             cJSON_GetObjectItemCaseSensitive(root, "reply_text")) ? "文字回复已准备" : "语音回复已准备");
         replied = true;
@@ -2426,8 +2522,7 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         else if (ev == BSP_BTN_LONG && btn == BSP_BTN_DOWN) input = X_AI_BACK;
         else return;
         if (!bsp_lvgl_lock(100)) return;
-        s_ai_ui.paused = xigua_ai_voice_phase() == XIGUA_AI_VOICE_PAUSED;
-        s_ai_ui.speaking = s_ai_ui.paused || xigua_ai_voice_phase() == XIGUA_AI_VOICE_SPEAKING;
+        ui_ai_sync_audio();
         x_ai_effect_t effect = x_ai_input(&s_ai_ui, input);
         if (effect == X_AI_START_VOICE && !ai_request_voice_current_mode()) {
             snprintf(s_ai_error, sizeof(s_ai_error), "%s", s_feedback);
@@ -2438,14 +2533,14 @@ void xigua_app_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             esp_err_t control_error = effect == X_AI_PAUSE_VOICE ? xigua_ai_pause_voice() :
                                      effect == X_AI_RESUME_VOICE ? xigua_ai_resume_voice() :
                                                                   xigua_ai_restart_voice();
-            s_ai_ui.paused = xigua_ai_voice_phase() == XIGUA_AI_VOICE_PAUSED;
-            s_ai_ui.speaking = s_ai_ui.paused || xigua_ai_voice_phase() == XIGUA_AI_VOICE_SPEAKING;
+            ui_ai_sync_audio();
             snprintf(s_ai_audio_status, sizeof(s_ai_audio_status), "%s",
                      control_error != ESP_OK ? "朗读操作未完成" :
                      s_ai_ui.paused ? "已暂停朗读" : "正在缓冲语音");
         }
         else if (effect == X_AI_READ_REPLY || effect == X_AI_RESTART_VOICE) {
             esp_err_t read_error = xigua_ai_read_reply(s_ai_reply);
+            if (read_error == ESP_OK) s_ai_audio_page = s_page;
             s_ai_ui.speaking = read_error == ESP_OK;
             s_ai_ui.paused = false;
             snprintf(s_ai_audio_status, sizeof(s_ai_audio_status), "%s",

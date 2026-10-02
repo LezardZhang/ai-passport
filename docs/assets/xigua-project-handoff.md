@@ -6,6 +6,11 @@
 
 This is the current handoff for `feature/xigua-childcare`. It records the product direction, implemented modules, evidence from the latest device run, and the work still required. It contains no API key or Wi-Fi password.
 
+Resource changes must follow the [framework memory rules](../development/engineering/memory-budget.md)
+and update the [current Xigua resource budget](xigua-memory-budget.md).
+The dated memory audit below remains historical evidence, not a claim that
+the current application has passed capacity acceptance.
+
 ## Product direction
 
 The long-term product is a phone-independent childcare assistant on the ESP32-C3 FoloToy AI Passport. It should keep local childcare records offline, connect to a known Wi-Fi network automatically, capture a spoken request with the built-in microphone, send it to MiMo ASR and a language model, show a readable reply, and play story replies through the speaker.
@@ -17,8 +22,8 @@ Near-term work is to finish device voice acceptance, make the three-button infor
 - `main/xigua_app.c` provides childcare records for feeding, diaper, sleep, bath, tummy time, and timers. Records are stored in NVS and the latest action can be undone. Wi-Fi has a status page and a “Search nearby Wi-Fi” action; the user selects an SSID from scan results and uses the three-page keyboard only for the password.
 - `main/xigua_wifi.c` stores the last successful station configuration, scans at boot, and tries the three built-in networks before the previous saved network. The owner-authorized built-in profiles are tracked in `main/xigua_wifi_credentials.h`. When no candidate is visible, the device exposes a local scan-and-select flow instead of Bluetooth provisioning. Authentication expiry, authentication failure, association failure, and handshake timeouts retry up to three attempts. Stale BSSID locks are cleared, PMF is optional, power save is disabled during connection, and successful credentials are persisted.
 - `main/xigua_ai.c` uses the configured OpenAI-compatible MiMo endpoint for text, ASR, and the model configuration list. `main/xigua_ai_credentials.h` stores the owner-authorized shared endpoint, key, and model settings so a fresh clone does not require repeating local setup. Voice capture is 16 kHz, 16-bit, mono WAV written to the `voice_tmp` partition, with a maximum of 60 seconds and chunked Base64 upload. Capture runs in a worker task, so button callbacks stay non-blocking.
-- The top-level menu has separate `AI assistant` and `Story` entries. Story mode uses its own plain-text system prompt, then streams the completed reply through `mimo-v2.5-tts` as 24 kHz, 16-bit, mono PCM and plays it through the BSP audio path. Ordinary AI replies remain text-only; songs and white noise are unchanged.
-- The AI worker runs an automatic health check after IP acquisition. It first performs a public HTTPS probe, waits for time synchronization, and then sends a minimal MiMo text request. Bluetooth provisioning is no longer started, leaving more heap for Wi-Fi and TLS. A successful result is cached for six hours; failures retry every two minutes. MiMo requests send the standard Bearer header plus the legacy `api-key` header, and non-2xx responses retain a bounded body preview in the log.
+- The top-level menu has separate `AI assistant` and `Story` entries. Story mode uses its own plain-text system prompt, downloads `mimo-v2.5-tts` speech as 24 kHz, 16-bit, mono PCM into the compressed temporary cache, closes HTTPS, then plays through the BSP audio path. Ordinary AI replies are text-only by default with optional reading; songs and white noise are unchanged.
+- The AI worker runs an automatic health check after IP acquisition. It waits for time synchronization and sends one authenticated MiMo text request; that request verifies both the secure network path and the model, avoiding a redundant public TLS transaction that fragmented the ESP32-C3 internal heap before certificate verification. Bluetooth provisioning is no longer started, leaving more heap for Wi-Fi and TLS. A successful result is cached for six hours; failures retry every two minutes. MiMo requests send the standard Bearer header plus the legacy `api-key` header, and non-2xx responses retain a bounded body preview in the log.
 - `main/xigua_font_zh16.c` and `main/xigua_font_zh20.c` cover the current UI text, punctuation, and ASCII inventory. The larger font is used for primary Chinese text and recording/self-check messages. The LXGW WenKai license is kept beside the generated font.
 - `partitions.csv` reserves `voice_tmp` for temporary recordings while keeping the application within the 8 MB flash layout.
 
@@ -32,12 +37,11 @@ Normal flashing overwrites the bootloader, partition table, and factory applicat
 
 ## Latest verification
 
-- Build: PASS. ESP-IDF 5.5.3, ESP32-C3, 8 MB flash. Verified archive: `build/firmware/e7e4f48e1c03c0f62063028e7e1c9dd7a3979e6838658a5a3aa020b1ebc6e455/`.
+- Build: PASS. ESP-IDF 5.5.3, ESP32-C3, 8 MB flash. Complete-gate archive: `build/firmware/83cdd9ac0685d1f9db781cd66f25ae6f9b8c73bf8d5e41f5eeab7c881e5b1d90/`.
 - Host/static tests: PASS, including repository checks and BSP host tests.
-- Device flash and boot: PASS. The merged image was written and hash-verified over USB Serial/JTAG.
-- Device Wi-Fi: PASS in the observed retry scenario. The device logged reason 2 once, retried automatically, connected to `Lezard2.4G`, obtained an IP, and started SNTP.
-- Device HTTPS and MiMo text self-check: PASS. The secure log shows certificate validation, HTTP status 200 from the public probe, MiMo status 200, and `ESP_OK` from the text self-check.
-- Most recent flash confirmation: PASS. The device connected directly with WPA3-SAE on `Lezard2.4G`, obtained `192.168.50.115`, validated the certificate, and completed the MiMo self-check without an HTTP or TLS error.
+- Device flash and boot: PASS. The matching segmented archive `build/firmware/ffc9c792a0c3b447971757464fec540e3acc7bf19e6b3d1be902db151eb73ad3/` was written at `0x0`, `0x8000` and `0x10000`; NVS and `voice_tmp` were preserved.
+- Device Wi-Fi: PASS in the observed retry scenario. The device retried once, connected to `Lezard2.4G`, obtained `192.168.50.115`, and started SNTP.
+- Device secure MiMo self-check: PASS. With internal heap free `63,252` bytes and largest block `51,200` bytes before the request, certificate validation succeeded, MiMo returned HTTP 200 / `ESP_OK`, and the two-byte `OK` response was accepted without a public probe.
 - Device voice ASR and TTS: NOT RUN end to end in this round. The capture and upload path is implemented, but a confirmed microphone phrase, ASR transcript, model reply, and speaker playback still need device acceptance.
 
 ## Worktree checkpoint (2026-09-30)
@@ -394,13 +398,239 @@ image while keeping the existing data, run
 server. A local copy of the report is
 `build/xigua-care-cloud-verification.json`.
 
+## Cloud clear and voice heap fix (2026-10-02)
+
+The management console's clear-records action now archives the server rows and queues a
+high-priority `clear_records` command for the paired device. The device clears its local
+event ring, legacy aggregate counters, last-record fields, and cloud IDs while preserving
+settings and an unfinished active session, then acknowledges the command and publishes an
+empty snapshot. The Overview and home summary use today's event totals and show “no feeding
+record” when the count is zero, so a stale last amount cannot appear as a statistic after a
+cloud clear. Backend regression coverage checks command creation, delivery, and acknowledgement.
+
+Two physical voice attempts captured at 12:16 and 12:20 on October 2 completed microphone
+recording, then failed during ASR TLS certificate verification: RSA error `-0x4290` combines
+`MBEDTLS_ERR_RSA_PUBLIC_FAILED` (`-0x4280`) and `MBEDTLS_ERR_MPI_ALLOC_FAILED` (`-0x0010`).
+The handshake began with only 44,040 free bytes because upload staging was allocated early.
+Deferring only the response buffer in the previously flashed image was insufficient.
+
+ASR now allocates upload staging after TLS opens, releases it before allocating response
+storage, and releases the client before parsing JSON. Chat response storage grows with actual
+received bytes instead of reserving 16 KB before TLS; callback allocation/overflow errors are
+retained because HTTP perform does not propagate ON_DATA callback errors. A host regression
+executes the actual request functions with constrained handshake memory and allocation/write
+faults. Physical ASR and chat acceptance must be verified on the replacement image.
+
+The replacement merged image is `dc940380f4f2b6d06601db810f3c3c31dc5093a9c54074c9f3180834f7aa1e08`,
+with matching ELF `d1c373187fcaff5c24fbc66aab2686a56586d7ae2fb6b25023d35b620f5e50b6`.
+The complete gate passed and all 29 backend tests passed. Local checkpoint
+`57e6f50f757ce0969e3e48a1fb073be7071ebc09` retains source/configuration; segmented
+flashing preserved NVS and voice data. At 12:31 the matching image booted, obtained Wi-Fi
+IP, and returned authenticated MiMo self-check HTTP 200 / ESP_OK. The active serial
+capture spans conversation messages; physical voice acceptance and production clear-record
+synchronization remain pending. No test records were added to production.
+
+At 12:39 this image completed a three-second recording and validated the TLS certificate,
+then returned `ESP_ERR_NO_MEM` before receiving ASR headers. Moving allocation after TLS
+solved the certificate peak but still left upload/response staging too large for the
+connected client's remaining heap. Upload staging is now 902 bytes instead of 7,174 bytes;
+ASR response storage grows with received bytes instead of reserving 4 KB. Stage-specific
+heap diagnostics identify upload and response allocation failures. The host regression now
+also imposes a 2 KB staging budget while TLS is connected and covers negative response reads.
+
+The small-buffer replacement passed the complete gate and was flashed at 12:49, preserving
+NVS and voice data. Merged SHA-256:
+`ab3e14955fb145a13afec9b9c676ae2b3ca8e1f05d0d374638abdc645d951073`;
+matching ELF: `49db5f97735dd5fd9838c2598491bb5da693ee08d241b15f65201828cc0852fc`.
+Checkpoint `38fd9e5b4af10cf509c0f13c06808ef61969e604` includes the source and actual local
+application configuration. Matching startup, Wi-Fi and authenticated model self-check passed;
+physical ASR/chat acceptance is pending. Logs and identities are retained locally in
+`build/reports/xigua-asr-small-20261002/`.
+
+The 12:55 physical attempt on this image connected TLS with 11,576 free bytes and a
+7,680-byte largest block, then timed out waiting for a writable upload socket after 30 seconds;
+it did not reach ASR response headers. A control upload with a generated three-second silent
+WAV and the same request framing returned HTTP 200, establishing that this framing is accepted
+by the service. The device still retained microphone I2S/DMA resources during HTTPS.
+
+Capture now calls the BSP's reversible `bsp_audio_release()` after both successful and failed
+recording. It suspends the codec, retires codec/I2S/DMA resources, preserves the shared I2C bus
+and volume, and reports incomplete channel deletion. The next PCM operation initializes the
+driver normally. Host tests cover release/reinitialization, cleanup retry, capture failure,
+and release errors. Upload logs now record progress and DMA-capable heap; a zero socket write
+reports a timeout. The upload-timeout cause still needs physical verification on this revision.
+
+The release-after-capture image passed the complete gate and segmented flashing at 13:20.
+Merged SHA-256: `8a94eeadf89053e3d782fe43c5a5973803d934c3e9cc9dc87c47523a044c8900`;
+ELF SHA-256: `4b6526349f24a27f486740f34eb3c702aea891275b0845e6b624f51705fe40d5`.
+Checkpoint `10543ff1d509fa7441a27fb8ac6706191506dd77` retains matching source and local
+configuration. NVS, PHY data and voice storage were preserved. Matching startup, Wi-Fi,
+MiMo text self-check HTTP 200 / ESP_OK and cloud snapshot acknowledgement passed.
+Real voice remains pending; these startup checks do not validate ASR or speaker playback.
+The bounded serial capture remains active across messages. Evidence is retained in
+`build/reports/xigua-voice-dma-20261002/`.
+
+At 13:32 the physical voice attempt on this image released audio resources successfully
+(59,196 free bytes, 51,440 DMA-capable bytes), uploaded the complete 125,856-byte ASR
+request and received HTTP 200 / ESP_OK with a 48-byte transcript. ASR passed. The following
+5,773-byte chat request validated its certificate but failed writing its body with
+`ESP_ERR_HTTP_WRITE_DATA`, before any response headers. These are separate outcomes;
+the full voice interaction still failed. The saved report marks this explicitly.
+
+Chat now opens the HTTP connection explicitly and uses the same bounded write loop as ASR;
+each plaintext write is capped at 512 bytes, including TTS requests using that helper.
+Response callbacks continue to accumulate only received bytes, and reads verify message
+completion before accepting the response. Host coverage exercises a 5,773-byte request
+under constrained writes, short writes, zero writes, header/read failures, incomplete
+responses and body bytes delivered with headers. The effect on the physical chat failure
+still requires verification on the replacement image.
+
+The bounded-write image passed the complete gate and archive verification, and was flashed
+at 13:46 using compatible segmented images. Merged SHA-256:
+`42a0252de2c4022e3a5eacbe35deb23693b1a694cfd07dda8fad5180b671e6bc`;
+ELF SHA-256: `d918d67320bc3ae783a6911edf57c8fbd45fa7d7e6b40707268c4451311a5ac7`.
+Local checkpoint `85033fca0fe06e82272ed7800f1e88d8c89419f9` contains matching source and
+actual local configuration; the user branch/index and NVS/voice ranges were preserved.
+The matching image booted, joined the existing Wi-Fi, uploaded its 3,869-byte model
+self-check in bounded writes and received HTTP 200 / ESP_OK with a complete response.
+The physical voice request with childcare context, spoken reply and repeated-use recovery
+remain unverified on this image. Serial capture stays active across messages; evidence is
+retained locally in `build/reports/xigua-chat-chunk-20261002/`.
+
+At 13:54 the physical attempt on this image recorded 133,164 bytes, uploaded its ASR
+request and received HTTP 200 / ESP_OK with a 57-byte transcript. The subsequent
+5,782-byte chat upload completed, but response headers timed out after 45 seconds with
+only 4,204 DMA-capable bytes free. The report marks the full voice interaction FAIL.
+A control using generated text, the same 5,782-byte body size and 512-byte writes returned
+HTTP 200 in about eight seconds. It included no recording or private household context.
+
+The chat transaction now takes ownership of the serialized request and frees it immediately
+after upload, before fetching headers or allocating response storage. The caller receives
+a NULL pointer and retains cleanup responsibility for early/lock failures. Host tests now
+allocate real owned request storage and enforce a constrained receive budget; this exposes
+the previous lifetime error and checks successful/error cleanup without double frees.
+Model self-checks include normal childcare context, rather than exercising only the smaller
+context-free request. Physical verification of the replacement remains pending.
+
+The request-retirement image passed the complete gate and archive verification, then was
+flashed at 14:06 with the same partition table and segmented ranges. Merged SHA-256:
+`50e1d90dcf1ed43efd11319d08c59029b29ed9cbd4a7e387961320b2c6b5a6f8`;
+ELF SHA-256: `92add6c783600a843f223e0f743d17d57361bf55495d8f6420a652584a37d7b8`.
+Checkpoint `f9fd27691d2037c723c8944c4205a165fcab9889` retains matching source/configuration.
+The matching image booted and joined Wi-Fi. Its 4,952-byte self-check included local childcare
+context; after request retirement, free heap was 21,108 bytes and DMA-capable heap 13,352
+bytes. The complete response returned HTTP 200 / ESP_OK at 14:07, followed by cloud snapshot
+acknowledgements. Cloud context was not yet cached at that first check. A microphone-driven
+conversation with cached cloud context and repeated use remain unverified on this image.
+Logs and the verification record are in `build/reports/xigua-chat-retire-20261002/`;
+bounded serial capture continues across messages.
+
+At 14:10 a physical four-second microphone attempt on this image uploaded 185,928 bytes
+to ASR and received HTTP 200 / ESP_OK, then sent a 5,782-byte chat request with cached
+care context. Request retirement restored DMA-capable heap to 9,908 bytes. Chat returned
+HTTP 200 / ESP_OK with a 534-byte body and the UI opened the reply reader. The owner
+confirmed receiving the AI Q&A reply. This validates microphone-to-visible-answer Q&A;
+story generation, audible TTS and repeated-use checks remain separate.
+
+## Q&A and Story reply ownership (2026-10-02)
+
+The owner's next report exposed shared UI state: entering Story after Q&A retained
+the global reply text and reading view, without issuing a story request. Mode switches
+now clear text/error/audio state and enter preparation. Requests/results carry the
+originating mode; a late response is consumed without changing another mode's text.
+Progress and audio status update only their originating page. This retains the existing
+single text buffer and its within-mode last-reply behavior without reserving another
+4 KB on the no-PSRAM board. Cross-mode history is cleared when switching functions.
+Host checks exercise both switching directions, same-mode retention, late replies,
+failed responses and cached status reset. The complete gate passed; device navigation
+and a new generated story still require acceptance on the replacement image.
+
+Local source/configuration checkpoint: `e06790406f7f0fbc48341a77ffbfda716267c1a3`,
+ref `refs/codex/checkpoints/xigua-ai-modes-20261002`; branch/index preserved.
+Matching BIN/ELF/MAP archive and merged SHA-256:
+`build/firmware/c2c6e764c00494ebcb37161f9b8f15ba6e84e92c6611cb7c0ad8375876cb79ad/`.
+ELF SHA-256: `07bd93c9366c623b7bf5f81de786e102e9897f83c1778d8bbb7fb5be5ad40547`.
+Build: PASS, complete gate. Host tests: PASS. Device tests: PASS only for verified
+segmented flashing, matching ELF startup, existing Wi-Fi and authenticated MiMo
+self-check HTTP 200 / `ESP_OK` at 14:37. NVS and `voice_tmp` were not written by
+the flash operation. A twelve-hour serial capture remains active across turns.
+Unverified: physical Q&A-to-Story and Story-to-Q&A navigation, a new story and
+speaker playback, repeated voice requests, and device/web statistics consistency.
+Evidence: `build/reports/xigua-ai-modes-20261002/`.
+
+## Story speech TLS/PCM separation (2026-10-02)
+
+The persistent capture recorded a successful physical story request at 14:48:
+ASR HTTP 200, a separate 614-byte story chat request and HTTP 200 with a 5,806-byte
+response. Automatic speech at 14:49 and four manual retries at 14:50 all failed
+before receiving audio: RSA verification `0x4290`, TLS `-0x3000`, then
+`ESP_ERR_HTTP_CONNECT`, zero PCM bytes. The story text remained readable. Audio
+codec/DMA and download state were allocated before the TLS handshake.
+
+The new sequence releases idle audio resources, downloads verified SSE/ADPCM blocks
+to the existing `voice_tmp` cache under the shared networking lock, closes HTTPS,
+releases decoding buffers, then initializes PCM and plays locally. Complete cache
+replay, pause/continue and restart remain available without regenerating speech.
+This increases initial speech latency but prevents TLS/audio memory overlap. Failed
+or cancelled downloads never become playable; NVS records/settings are independent.
+The actual TTS transaction regression failed on the prior resource order and passes
+with full-size text, cached replay, allocation/HTTP/Flash/PCM failures and cancellation.
+Physical playback acceptance on the replacement image remains pending.
+
+Build: PASS, complete gate. Host tests: PASS. Local source/configuration checkpoint:
+`24ac50cca60eba2aff72aa879c939c3edcd1dc9d`, ref
+`refs/codex/checkpoints/xigua-tts-cache-20261002`; branch/index preserved.
+Verified matching BIN/ELF/MAP archive and merged SHA-256:
+`build/firmware/04eba2bb76e4844f928a91567fa7a126b17fb150bd64c4a60302161e904e3f10/`.
+ELF SHA-256: `c6a870f29f9ba7f5c48b30dddb6712a7a7bf09f3300cfd1751f5bd1361908da3`.
+At 15:08 segmented writes and hashes passed; the matching ELF started on the
+identified `4C:11:AE:31:0E:3C` device. NVS and the temporary recording partition
+were not written by the flash operation. A new twelve-hour serial capture is active.
+Device tests: PASS for flash/startup, existing Wi-Fi, authenticated MiMo HTTP 200 /
+`ESP_OK` at 15:09 and cloud snapshot acknowledgment. Unverified: new-image microphone/story/TTS
+and audible playback, pause/resume/replay, repeated requests and statistics consistency.
+Reports: `build/reports/xigua-tts-cache-20261002/`.
+
+## Memory capacity assessment (2026-10-02)
+
+A read-only audit of the `04eba2bb76e4...` ELF/MAP, source and existing serial
+evidence found narrow RAM headroom and an almost-full application partition.
+The current image's pre-check heap is 63,404 bytes; after TLS connects it is
+17,952 bytes with a 7,680-byte largest block. The previous image's successful
+physical Q&A sampled only 13,020 bytes free, largest 7,680, DMA free 5,264 after
+connecting. These are stage samples, not measured lifetime minima. Current-image
+physical TTS and BLE peaks still have no acceptance evidence.
+
+The 28,672-byte LVGL pool and 19,200-byte LCD DMA buffer are independent
+allocations. The catalog reserves 10,000 bytes and another 10,000 during refresh.
+UI/worker/consumer reply storage reserves 12,304 bytes, with another 4,104-byte
+queue payload. The 16 KiB RX + 4 KiB TX TLS buffers exclude certificate, TCP and
+HTTP allocations. Catalog/snapshot preparation can allocate before taking the
+network lock; the current lock alone therefore does not bound all peak memory.
+
+Application Flash: 6,185,888 / 6,225,920 bytes, only 40,032 bytes remaining.
+The full font occupies 4,050,047 bytes of Flash data and zero static DRAM; removing
+it would not directly resolve TLS heap exhaustion. Potential display, catalog
+reference and reply-ownership changes could reclaim roughly 20–24 KiB of RAM
+without removing core functions, but none of these savings is implemented or
+hardware-validated. Preserve records, statistics consistency, Q&A and Story;
+pause new feature growth and complete resource-lifetime/peak budgeting before
+claiming sufficient capacity. Mode ownership and statistics synchronization have
+separate correctness causes, which RAM limits do not excuse.
+
+No firmware edit, new build, flash or feature removal was performed for this
+assessment. Detailed metrics, estimate boundaries and required repeated/long-response/
+reconnect/BLE acceptance are saved in `build/reports/xigua-memory-audit-20261002/`.
+Hardware reference: [ESP32-C3 datasheet](https://documentation.espressif.com/esp32-c3_datasheet_en.html);
+measurement semantics: [ESP-IDF heap information](https://docs.espressif.com/projects/esp-idf/en/release-v5.5/esp32c3/api-reference/system/heap_debug.html).
+
 ## Persistent time/network status bar (2026-10-01)
 
-Every application page now has a separate row for local `HH:MM`, Wi-Fi/probe
+Every application page now has a separate row for local `HH:MM`, Wi-Fi/model
 state and battery, with the page title below. The one-second timer updates idle
 pages and reply readers. Uncalibrated time is `--:--`, unavailable battery is
-`--%`, and an IP connection is distinguished from public HTTPS probe success.
-Model failure alone does not mark the network as failed. Content, keyboard and
+`--%`, and an IP connection is distinguished from the authenticated MiMo check.
+Model failure alone does not mark the IP state as failed. Content, keyboard and
 pagination bounds remain unchanged.
 
 Build: PASS, complete `./tools/validate.sh` with ESP-IDF 5.5.3.

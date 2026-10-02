@@ -40,6 +40,7 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_xigua_ai_ui.c -o "${test_dir}/test_xigua_ai_ui"
     "${test_dir}/test_xigua_ai_ui"
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_ai_result_modes.py
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_xigua_tts_stream.c main/xigua_tts_stream.c \
         -o "${test_dir}/test_xigua_tts_stream"
@@ -97,6 +98,8 @@ run_static_checks() {
     done
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_deep_sleep_contract.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_voice_capture.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_http_memory.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_tts_memory.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_tts.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_voice_records.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_xigua_status_bar.py

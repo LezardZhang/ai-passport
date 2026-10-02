@@ -124,6 +124,12 @@ The AI assistant handles Q&A and records, while the separate Story page handles
 story prompts through the same PTT, ASR, model, and TTS building blocks. The model
 must return either a structured command or a parent-facing reply.
 
+Reply state belongs to the selected function. Switching between AI assistant and
+Story resets the shared reader, text, error and audio status to preparation; neither
+entry displays the other function's last reply. Returning to the same function retains
+its current reply. Completed requests carry their originating mode, and a late result
+from another mode is consumed without replacing the current text or page state.
+
 The implemented AI UI separates preparation, recording, processing, reply reading,
 reply actions, and failure. Preparation has three highlighted cards: hold OK to
 speak, view the last reply, and return. Short OK never sends a canned prompt or
@@ -151,14 +157,18 @@ The existing 2 MiB `voice_tmp` scratch partition stores these blocks instead of 
 rather than overwriting unread audio. Erase it before playback, write complete blocks,
 and publish them only after successful writes. Flash I/O stays outside critical
 sections; I2S interrupts stay in IRAM during cache writes.
-A separate PCM worker starts after three seconds are available (72,000 decoded PCM
-bytes at 12 kHz); shorter completed clips drain immediately. Pausing drains the
-accepted DMA samples, suspends the codec, and preserves the next block. Reception
-continues into Flash while paused, so a full RAM queue cannot stall the server stream.
-Resume wakes the codec and reads from that cursor. After receiving the entire clip,
-the HTTP connection closes even while the speaker remains paused. Buffer underruns
-re-enter buffering. Logs record pause/resume offsets, underruns, PCM feed gaps and
-stack headroom; intentional pauses are excluded from the feed-gap measurement.
+Speech downloads completely into Flash before the PCM worker or codec starts.
+The download releases idle audio DMA, takes the shared networking lock, retires the
+request after upload, and creates decoding buffers after HTTPS headers arrive.
+Only a completed, validated SSE stream becomes playable. HTTP, TLS and decoder
+buffers are released before initializing audio, avoiding simultaneous TLS/PCM memory
+pressure on the no-PSRAM board. This adds a wait before speech begins; the text remains
+readable while downloading. The networking lock is released before local playback,
+so cloud synchronization can resume. Pausing drains accepted DMA samples, suspends
+the codec, and preserves the next block. Resume wakes the codec and reads from that
+cursor. Logs record pause/resume offsets, PCM feed gaps and stack headroom;
+intentional pauses are excluded from the feed-gap measurement. PCM completion or
+failure releases the codec/I2S/DMA resources for the next network request.
 A completed cache is bound to the exact reply by SHA-256 and can replay locally
 without Wi-Fi. A new microphone recording reuses the same scratch partition and
 invalidates cached speech; app shutdown/reboot loses its in-memory validity and
@@ -168,7 +178,8 @@ The TLS receive limit is 16 KiB because MiMo sends full-size records; reducing
 it to 8 KiB interrupts speech with mbedTLS error `-0x7100`. TLS reserves the 16 KiB receive and 4 KiB transmit buffers for each connection
 and releases them at HTTP client cleanup. Dynamic per-record allocation is disabled:
 actual-machine replay intermittently failed with `-0x7F00` when a full-size record
-could no longer obtain a contiguous block during playback. Start the PCM worker only after HTTPS response headers arrive.
+could no longer obtain a contiguous block during playback. PCM playback now starts
+after the entire HTTPS download closes, removing that concurrency.
 Failure shows the error separately and keeps the previous reply accessible.
 The reply buffer is 4096 bytes, stored outside task stacks. The model budget is
 1024 output tokens for assistant replies and 2048 for stories; the chat I/O timeout is 45 seconds. Both local UTF-8-safe
@@ -343,13 +354,13 @@ reader or keyboard area. Numeric fields use Montserrat 14; network labels use
 the checked 16 px Chinese subset. An unavailable or invalid battery is `--%`.
 
 The row prioritizes the current Wi-Fi state over earlier service-check results.
-The localized Connected label means an IP connection without a confirmed public
-HTTPS check; Checking means the existing check is running; Online means the
-latest public HTTPS probe succeeded, including when the model subsequently
-failed. A failed public probe shows Connection failed. These are periodic results,
-not continuous Internet or childcare-backend availability measurements. No
-network request runs from the LVGL timer. SSID/IP and model details remain on
-their existing pages.
+The localized Connected label means an IP connection before the secure model
+check; Checking means the model check is running; Online means the latest
+authenticated MiMo check succeeded. A model check failure keeps the IP state
+visible as Online while the settings page reports the model failure. These are
+periodic results, not continuous Internet or childcare-backend availability
+measurements. No network request runs from the LVGL timer. SSID/IP and model
+details remain on their existing pages.
 
 The requested NFC/phone configuration flow is a proposed next increment, not
 implemented by this status-bar change. The board's NTAG213 is a passive tag

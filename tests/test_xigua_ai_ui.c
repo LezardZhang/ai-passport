@@ -9,6 +9,17 @@ int main(void)
     /* Repeated short confirmations never issue any network/audio effect. */
     for (int i = 0; i < 20; ++i) assert(x_ai_input(&ui, X_AI_OK) == X_AI_NONE);
     assert(ui.view == X_AI_READY);
+    /* A function switch cannot reuse another mode's reader/actions/reply. */
+    ui = (x_ai_ui_t){ .view = X_AI_READING, .has_reply = true, .pages = 3, .page = 2 };
+    assert(x_ai_enter_mode(&ui, true));
+    assert(ui.view == X_AI_READY && ui.story_reply && !ui.has_reply && ui.page == 0 && ui.pages == 1);
+    ui.focus = 1;
+    assert(x_ai_input(&ui, X_AI_OK) == X_AI_NONE && ui.view == X_AI_READY);
+    x_ai_complete(&ui, true);
+    ui.page = 2;ui.pages = 3;
+    assert(!x_ai_enter_mode(&ui, true) && ui.has_reply && ui.page == 2);
+    assert(x_ai_enter_mode(&ui, false) && !ui.has_reply && !ui.story_reply && ui.view == X_AI_READY);
+    ui = (x_ai_ui_t){ .view = X_AI_READY, .pages = 4 };
     assert(x_ai_input(&ui, X_AI_HOLD_OK) == X_AI_START_VOICE);
     assert(x_ai_input(&ui, X_AI_HOLD_OK) == X_AI_NONE);
     assert(x_ai_input(&ui, X_AI_RELEASE_OK) == X_AI_STOP_VOICE);

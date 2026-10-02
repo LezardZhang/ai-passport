@@ -94,8 +94,8 @@
 #define XIGUA_AI_VOICE_MAX_WAV_BYTES (XIGUA_AI_WAV_HEADER_BYTES + XIGUA_AI_VOICE_MAX_PCM_BYTES)
 #define XIGUA_AI_AUDIO_CHUNK_BYTES 2048
 #define XIGUA_AI_VOICE_PARTITION_LABEL "voice_tmp"
-#define XIGUA_AI_VOICE_FLASH_CHUNK_BYTES 3072
-#define XIGUA_AI_VOICE_B64_CHUNK_BYTES 4100
+#define XIGUA_AI_VOICE_FLASH_CHUNK_BYTES 384
+#define XIGUA_AI_VOICE_B64_CHUNK_BYTES 516
 #define XIGUA_AI_TTS_HZ 24000
 #define XIGUA_AI_TTS_BITS 16
 #define XIGUA_AI_TTS_CHANNELS 1
@@ -172,6 +172,7 @@ typedef struct {
     esp_err_t error;
     bool truncated;
     bool audio_failed;
+    bool story;
     char text[XIGUA_AI_REPLY_BYTES];
 } xigua_ai_result_t;
 
@@ -179,6 +180,7 @@ typedef struct {
     char *data;
     size_t length;
     size_t capacity;
+    esp_err_t error;
 } xigua_ai_body_t;
 
 static void log_http_connect_diagnostics(esp_http_client_handle_t client, const char *stage,
@@ -254,8 +256,19 @@ static esp_err_t http_event(esp_http_client_event_t *event)
 {
     xigua_ai_body_t *body = event ? event->user_data : NULL;
     if (!body || event->event_id != HTTP_EVENT_ON_DATA || event->data_len <= 0) return ESP_OK;
+    if (body->error != ESP_OK) return body->error;
     size_t incoming = (size_t)event->data_len;
-    if (body->length + incoming + 1 > body->capacity) return ESP_ERR_NO_MEM;
+    if (incoming >= body->capacity - body->length) {
+        body->error = ESP_ERR_NO_MEM;
+        return body->error;
+    }
+    /* Allocate only received bytes, after the TLS certificate handshake. */
+    char *data = realloc(body->data, body->length + incoming + 1);
+    if (!data) {
+        body->error = ESP_ERR_NO_MEM;
+        return body->error;
+    }
+    body->data = data;
     memcpy(body->data + body->length, event->data, incoming);
     body->length += incoming;
     body->data[body->length] = '\0';
@@ -300,24 +313,24 @@ static esp_err_t build_request(const char *prompt, const char *system_prompt, bo
     return *payload ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-static esp_err_t post_json_internal(const char *payload, char *response, size_t response_size,
+static esp_err_t write_http_all(esp_http_client_handle_t client, const char *data, size_t length);
+
+static esp_err_t post_json_internal(char **owned_payload, char *response, size_t response_size,
                            size_t body_capacity)
 {
-    if (!payload || !response || response_size == 0) return ESP_ERR_INVALID_ARG;
+    if (!owned_payload || !*owned_payload || !response || response_size == 0) return ESP_ERR_INVALID_ARG;
+    char *payload = *owned_payload;
     s_response_truncated = false;
     ESP_LOGI(TAG, "MiMo request bytes=%u free=%u largest=%u",
              (unsigned)strlen(payload),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     if (body_capacity == 0) return ESP_ERR_INVALID_ARG;
-    char *body_data = calloc(1, body_capacity);
-    if (!body_data) return ESP_ERR_NO_MEM;
-    xigua_ai_body_t body = { .data = body_data, .capacity = body_capacity };
+    xigua_ai_body_t body = { .capacity = body_capacity };
     esp_http_client_handle_t client = NULL;
     char url[256];
     int written = snprintf(url, sizeof(url), "%s/chat/completions", XIGUA_AI_BASE_URL);
     if (written < 0 || (size_t)written >= sizeof(url)) {
-        free(body_data);
         return ESP_ERR_INVALID_SIZE;
     }
     esp_http_client_config_t config = {
@@ -332,7 +345,7 @@ static esp_err_t post_json_internal(const char *payload, char *response, size_t 
         .user_data = &body,
     };
     client = esp_http_client_init(&config);
-    if (!client) { free(body_data); return ESP_ERR_NO_MEM; }
+    if (!client) return ESP_ERR_NO_MEM;
     // MiMo deployments use the standard OpenAI bearer header. Keep the
     // legacy api-key header as well so older token-plan gateways continue to
     // accept existing device credentials.
@@ -343,10 +356,52 @@ static esp_err_t post_json_internal(const char *payload, char *response, size_t 
     }
     esp_http_client_set_header(client, "api-key", XIGUA_AI_API_KEY);
     esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_post_field(client, payload, (int)strlen(payload));
-    esp_err_t err = esp_http_client_perform(client);
+    size_t payload_length = strlen(payload);
+    esp_err_t err = esp_http_client_open(client, (int)payload_length);
+    if (err != ESP_OK) log_http_connect_diagnostics(client, "open", err);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "MiMo connected free=%u largest=%u dma=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
+        /* Keep plaintext/TCP writes small while TLS owns most of the heap. */
+        err = write_http_all(client, payload, payload_length);
+    }
+    /* The streaming client never retains this request pointer. Reclaim it
+     * before TCP receives the response; the caller may still free NULL. */
+    free(*owned_payload);
+    *owned_payload = NULL;
+    ESP_LOGI(TAG, "MiMo request retired bytes=%u free=%u dma=%u",
+             (unsigned)payload_length,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "MiMo upload finished bytes=%u free=%u dma=%u",
+                 (unsigned)payload_length,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
+        if (esp_http_client_fetch_headers(client) < 0) {
+            err = ESP_FAIL;
+            log_http_connect_diagnostics(client, "fetch_headers", err);
+        }
+    }
+    /* The callback receives body bytes from both header fetching and reads.
+     * It owns accumulation; never append the read scratch a second time. */
+    while (err == ESP_OK && body.error == ESP_OK) {
+        char chunk[256];
+        int read = esp_http_client_read(client, chunk, sizeof(chunk));
+        if (read < 0) {
+            err = ESP_FAIL;
+            log_http_connect_diagnostics(client, "read", err);
+        } else if (read == 0) {
+            if (!esp_http_client_is_complete_data_received(client)) err = ESP_ERR_INVALID_RESPONSE;
+            break;
+        }
+    }
     int status = esp_http_client_get_status_code(client);
-    if (err != ESP_OK) log_http_connect_diagnostics(client, "perform", err);
+    /* The HTTP parser does not propagate ON_DATA callback errors. */
+    if (err == ESP_OK) err = body.error;
+    esp_http_client_cleanup(client);
     ESP_LOGI(TAG, "MiMo response status=%d err=%s body=%u",
              status, esp_err_to_name(err), (unsigned)body.length);
     if (err == ESP_OK && (status < 200 || status >= 300)) {
@@ -358,7 +413,7 @@ static esp_err_t post_json_internal(const char *payload, char *response, size_t 
         err = status == 401 || status == 403 ? ESP_ERR_INVALID_CRC : ESP_FAIL;
     }
     if (err == ESP_OK) {
-        cJSON *root = cJSON_ParseWithLength(body.data, body.length);
+        cJSON *root = body.data ? cJSON_ParseWithLength(body.data, body.length) : NULL;
         cJSON *choices = root ? cJSON_GetObjectItem(root, "choices") : NULL;
         cJSON *choice = cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : NULL;
         cJSON *message = choice ? cJSON_GetObjectItem(choice, "message") : NULL;
@@ -372,12 +427,11 @@ static esp_err_t post_json_internal(const char *payload, char *response, size_t 
         }
         cJSON_Delete(root);
     }
-    esp_http_client_cleanup(client);
-    free(body_data);
+    free(body.data);
     return err;
 }
 
-static esp_err_t post_json(const char *payload, char *response, size_t response_size,
+static esp_err_t post_json(char **payload, char *response, size_t response_size,
                            size_t body_capacity)
 {
     if (!xigua_network_take(10000)) return ESP_ERR_TIMEOUT;
@@ -393,7 +447,7 @@ static esp_err_t request_once_sized_prompt(const char *prompt, const char *syste
     char *payload = NULL;
     esp_err_t err = build_request(prompt, system_prompt, care_context, &payload);
     if (err != ESP_OK) return err;
-    err = post_json(payload, response, response_size, body_capacity);
+    err = post_json(&payload, response, response_size, body_capacity);
     free(payload);
     return err;
 }
@@ -414,39 +468,14 @@ static esp_err_t request_once_sized(const char *prompt, char *response, size_t r
                                     size_t body_capacity)
 {
     return request_once_sized_prompt(prompt, s_system_prompt, response, response_size,
-                                     body_capacity, false);
-}
-
-static bool probe_public_https_internal(void)
-{
-    esp_http_client_config_t config = {
-        .url = "https://www.baidu.com/", .method = HTTP_METHOD_HEAD,
-        .timeout_ms = 8000, .crt_bundle_attach = esp_crt_bundle_attach,
-        .buffer_size = 512, .buffer_size_tx = 512, .keep_alive_enable = false,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) return false;
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    if (err != ESP_OK) log_http_connect_diagnostics(client, "public probe", err);
-    esp_http_client_cleanup(client);
-    ESP_LOGI(TAG, "public HTTPS probe status=%d err=%s", status, esp_err_to_name(err));
-    return err == ESP_OK && status >= 200 && status < 500;
-}
-
-static bool probe_public_https(void)
-{
-    if (!xigua_network_take(10000)) return false;
-    bool online=probe_public_https_internal();
-    xigua_network_give();
-    return online;
+                                     body_capacity, true);
 }
 
 static void wait_for_clock_sync(void)
 {
     time_t now = time(NULL);
     if (now >= 1700000000) return;
-    ESP_LOGI(TAG, "waiting for SNTP before HTTPS probe (epoch=%ld status=%d)",
+    ESP_LOGI(TAG, "waiting for SNTP before secure model check (epoch=%ld status=%d)",
              (long)now, (int)esp_sntp_get_sync_status());
     const TickType_t step = pdMS_TO_TICKS(1000);
     for (int i = 0; i < 10; ++i) {
@@ -457,7 +486,7 @@ static void wait_for_clock_sync(void)
         }
         vTaskDelay(step);
     }
-    ESP_LOGW(TAG, "SNTP time not ready; continuing HTTPS probe epoch=%ld",
+    ESP_LOGW(TAG, "SNTP time not ready; continuing secure model check epoch=%ld",
              (long)time(NULL));
 }
 
@@ -470,8 +499,11 @@ static xigua_ai_health_t run_health_check(void)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     wait_for_clock_sync();
-    if (!probe_public_https()) return XIGUA_AI_HEALTH_NETWORK_FAILED;
     if (!xigua_ai_configured()) return XIGUA_AI_HEALTH_MODEL_FAILED;
+    /* The authenticated MiMo request is the network and model check. A second
+     * public TLS transaction here needlessly fragments the small internal heap
+     * before mbedTLS verifies MiMo's certificate. Include normal care context
+     * so the check exercises the same request memory as an actual conversation. */
     char answer[64] = { 0 };
     esp_err_t err = request_once_sized("只回复OK", answer, sizeof(answer), 2048);
     ESP_LOGI(TAG, "MiMo text self-check err=%s answer_bytes=%u", esp_err_to_name(err),
@@ -526,8 +558,17 @@ static const esp_partition_t *voice_partition(void)
 static esp_err_t write_http_all(esp_http_client_handle_t client, const char *data, size_t length)
 {
     while (length > 0) {
-        int written = esp_http_client_write(client, data, (int)length);
-        if (written <= 0) return ESP_FAIL;
+        size_t chunk = length > 512 ? 512 : length;
+        int written = esp_http_client_write(client, data, (int)chunk);
+        if (written <= 0) {
+            esp_err_t err = written == 0 ? ESP_ERR_TIMEOUT : ESP_FAIL;
+            ESP_LOGW(TAG, "HTTP write stopped rc=%d remaining=%u free=%u dma=%u",
+                     written, (unsigned)length,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
+            log_http_connect_diagnostics(client, "write", err);
+            return err;
+        }
         data += written;
         length -= (size_t)written;
     }
@@ -658,7 +699,7 @@ static void tts_playback_task(void *arg)
 
 static bool tts_enqueue_block(xigua_tts_playback_t *playback, const uint8_t *pcm, size_t bytes)
 {
-    if (s_voice_stop || playback->abort || playback->finished) return false;
+    if (s_voice_stop || playback->abort || playback->error != ESP_OK) return false;
     if (!xigua_adpcm_encode(&playback->encoder, pcm, bytes, &playback->encoding)) {
         playback->error = ESP_ERR_INVALID_SIZE;
         return false;
@@ -739,29 +780,32 @@ static esp_err_t tts_play_cached(void)
 static esp_err_t tts_stream(const char *text)
 {
     if (!text || !text[0]) return ESP_ERR_INVALID_ARG;
-    esp_err_t err = xigua_audio_output_prepare(XIGUA_TTS_PLAYBACK_HZ, XIGUA_AI_TTS_BITS,
-                                                XIGUA_AI_TTS_CHANNELS);
+    /* Recording/replay may leave idle DMA allocated. TLS certificate checks
+     * need that RAM; initialize PCM only after the download is closed. */
+    esp_err_t err = bsp_audio_release();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "TTS audio init failed: %s", esp_err_to_name(err));
-        (void)bsp_audio_sleep();
+        ESP_LOGE(TAG, "TTS audio release failed: %s", esp_err_to_name(err));
         return err;
     }
-    bsp_audio_set_volume(80);
     uint8_t digest[32];
     if (mbedtls_sha256((const unsigned char *)text, strlen(text), digest, 0) != 0) {
-        (void)bsp_audio_sleep();
         return ESP_FAIL;
     }
     if (s_tts_cached_valid && memcmp(digest, s_tts_cached_digest, sizeof(digest)) == 0) {
-        err = tts_play_cached();
-        (void)bsp_audio_sleep();
-        return err;
+        err = xigua_audio_output_prepare(XIGUA_TTS_PLAYBACK_HZ, XIGUA_AI_TTS_BITS,
+                                         XIGUA_AI_TTS_CHANNELS);
+        if (err == ESP_OK) {
+            bsp_audio_set_volume(80);
+            err = tts_play_cached();
+        }
+        esp_err_t release = bsp_audio_release();
+        return err == ESP_OK ? release : err;
     }
     const esp_partition_t *partition = voice_partition();
-    if (!partition) { (void)bsp_audio_sleep(); return ESP_ERR_NOT_FOUND; }
+    if (!partition) return ESP_ERR_NOT_FOUND;
     s_tts_cached_valid = false;
-    /* Erase before PCM playback begins. Network reception can then append
-     * while paused without filling RAM or blocking on a full speaker queue. */
+    /* Download compressed blocks to Flash before enabling the speaker. This
+     * keeps TLS records/certificates and codec/DMA/task memory disjoint. */
     ESP_LOGI(TAG, "TTS temporary cache preparation bytes=%u", (unsigned)partition->size);
     for (size_t offset = 0; offset < partition->size; offset += 65536) {
         if (s_voice_stop) { err = ESP_ERR_INVALID_STATE; break; }
@@ -770,19 +814,13 @@ static esp_err_t tts_stream(const char *text)
         err = esp_partition_erase_range(partition, offset, count);
         if (err != ESP_OK) break;
     }
-    if (err != ESP_OK) { (void)bsp_audio_sleep(); return err; }
+    if (err != ESP_OK) return err;
 
     ESP_LOGI(TAG, "TTS start free=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-    xigua_tts_playback_t *playback = calloc(1, sizeof(*playback));
-    if (!playback) { (void)bsp_audio_sleep(); return ESP_ERR_NO_MEM; }
-    playback->lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
-    playback->partition = partition;
-    xigua_tts_cache_init(&playback->cache, partition->size);
-    /* Start the PCM reader after receiving the HTTPS headers. */
-    playback->finished = true;
-    s_tts_playback = playback;
+    xigua_tts_playback_t *playback = NULL;
+    bool network_locked = false;
 
     cJSON *root = cJSON_CreateObject();
     cJSON *messages = cJSON_CreateArray();
@@ -832,6 +870,11 @@ static esp_err_t tts_stream(const char *text)
         .keep_alive_enable = false,
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
+    if (!xigua_network_take(10000)) {
+        err = ESP_ERR_TIMEOUT;
+        goto tts_cleanup_json;
+    }
+    network_locked = true;
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
         err = ESP_ERR_NO_MEM;
@@ -846,6 +889,11 @@ static esp_err_t tts_stream(const char *text)
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_header(client, "Accept", "text/event-stream");
     err = esp_http_client_open(client, (int)strlen(payload));
+    ESP_LOGI(TAG, "TTS connected err=%s free=%u largest=%u dma=%u",
+             esp_err_to_name(err),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
     if (err == ESP_OK) err = write_http_all(client, payload, strlen(payload));
     free(payload);
     payload = NULL;
@@ -854,33 +902,31 @@ static esp_err_t tts_stream(const char *text)
         log_http_connect_diagnostics(client, "TTS fetch_headers", err);
     }
     int status = esp_http_client_get_status_code(client);
+    if (err == ESP_OK && (status < 200 || status >= 300)) err = ESP_FAIL;
     /* The API's audio strings can exceed 40 KiB. Decode them incrementally
      * into a 1 KiB PCM sink instead of holding a full SSE line/cJSON copy. */
-    xigua_tts_stream_t *stream = calloc(1, sizeof(*stream));
-    char *chunk = malloc(4096);
+    xigua_tts_stream_t *stream = NULL;
+    char *chunk = NULL;
     int64_t max_receive_gap_us = 0;
     int64_t last_data_us = esp_timer_get_time();
     esp_http_client_set_timeout_ms(client, 1000);
-    if (!stream || !chunk) err = ESP_ERR_NO_MEM;
-    if (err == ESP_OK && (status < 200 || status >= 300)) err = ESP_FAIL;
     if (err == ESP_OK) {
-        playback->finished = false;
-        if (xTaskCreate(tts_playback_task, "xigua_tts_pcm", 4096, playback, 6, NULL) != pdPASS) {
-            playback->finished = true;
-            err = ESP_ERR_NO_MEM;
+        playback = calloc(1, sizeof(*playback));
+        if (!playback) err = ESP_ERR_NO_MEM;
+        else {
+            playback->lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
+            playback->partition = partition;
+            xigua_tts_cache_init(&playback->cache, partition->size);
+            playback->finished = true; /* No PCM consumer during download. */
+            s_tts_playback = playback;
+            stream = calloc(1, sizeof(*stream));
+            chunk = malloc(4096);
+            if (!stream || !chunk) err = ESP_ERR_NO_MEM;
         }
-        ESP_LOGI(TAG, "TTS cache init err=%s rate=%u free=%u largest=%u",
-                 esp_err_to_name(err), (unsigned)XIGUA_TTS_PLAYBACK_HZ,
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     }
     if (stream) xigua_tts_stream_init(stream, tts_queue_pcm, playback);
     while (err == ESP_OK && !stream->done) {
         if (s_voice_stop) { err = ESP_ERR_INVALID_STATE; break; }
-        if (playback->finished) {
-            err = playback->error != ESP_OK ? playback->error : ESP_FAIL;
-            break;
-        }
         int64_t read_start_us = esp_timer_get_time();
         int count = esp_http_client_read(client, chunk, 4096);
         int64_t now = esp_timer_get_time();
@@ -898,6 +944,9 @@ static esp_err_t tts_stream(const char *text)
     if (err == ESP_OK && !xigua_tts_stream_finish(stream)) err = ESP_ERR_INVALID_RESPONSE;
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
+    xigua_network_give();
+    network_locked = false;
+    if (s_voice_stop) err = ESP_ERR_INVALID_STATE;
     if (err == ESP_OK && playback->pending_bytes &&
         !tts_enqueue_block(playback, playback->pending_pcm, playback->pending_bytes)) {
         err = s_voice_stop ? ESP_ERR_INVALID_STATE :
@@ -912,25 +961,30 @@ static esp_err_t tts_stream(const char *text)
         ESP_LOGI(TAG, "TTS cache complete blocks=%u pcm=%u",
                  (unsigned)s_tts_cached_audio.written_blocks, (unsigned)s_tts_cached_audio.written_pcm);
     }
-    portENTER_CRITICAL(&playback->lock);
-    playback->producer_done = true;
-    portEXIT_CRITICAL(&playback->lock);
-    if (err != ESP_OK) playback->abort = true;
-    while (!playback->finished) vTaskDelay(pdMS_TO_TICKS(5));
-    if (err == ESP_OK && playback->error != ESP_OK) err = playback->error;
-    if (s_voice_stop) err = ESP_ERR_INVALID_STATE;
-    ESP_LOGI(TAG, "TTS playback played=%u underruns=%u max_feed_gap_ms=%u max_receive_gap_ms=%u",
-             (unsigned)playback->played_bytes, playback->buffering.underruns,
-             (unsigned)(playback->max_feed_gap_us / 1000),
-             (unsigned)(max_receive_gap_us / 1000));
+    ESP_LOGI(TAG, "TTS download max_receive_gap_ms=%u", (unsigned)(max_receive_gap_us / 1000));
     ESP_LOGI(TAG, "TTS response status=%d err=%s pcm_bytes=%u chunks=%u free=%u", status,
              esp_err_to_name(err), stream ? (unsigned)stream->bytes : 0U,
              stream ? (unsigned)stream->chunks : 0U,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
     free(stream);
     free(chunk);
+    tts_playback_destroy(playback);
+    playback = NULL;
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "TTS download closed; starting cached PCM free=%u largest=%u dma=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
+        err = xigua_audio_output_prepare(XIGUA_TTS_PLAYBACK_HZ, XIGUA_AI_TTS_BITS,
+                                         XIGUA_AI_TTS_CHANNELS);
+        if (err == ESP_OK) {
+            bsp_audio_set_volume(80);
+            err = tts_play_cached();
+        }
+    }
 
 tts_cleanup_json:
+    if (network_locked) xigua_network_give();
     tts_playback_destroy(playback);
     free(payload);
     cJSON_Delete(root);
@@ -938,11 +992,11 @@ tts_cleanup_json:
     cJSON_Delete(user);
     cJSON_Delete(assistant);
     cJSON_Delete(audio);
-    (void)bsp_audio_sleep();
-    return err;
+    esp_err_t release = bsp_audio_release();
+    return err == ESP_OK ? release : err;
 }
 
-static esp_err_t record_voice(size_t *wav_bytes_out)
+static esp_err_t record_voice_internal(size_t *wav_bytes_out)
 {
     if (!wav_bytes_out) return ESP_ERR_INVALID_ARG;
     const esp_partition_t *partition = voice_partition();
@@ -1029,6 +1083,22 @@ static esp_err_t record_voice(size_t *wav_bytes_out)
     return ESP_OK;
 }
 
+static esp_err_t record_voice(size_t *wav_bytes_out)
+{
+    if (!wav_bytes_out) return ESP_ERR_INVALID_ARG;
+    esp_err_t err = record_voice_internal(wav_bytes_out);
+    /* Microphone DMA is idle during HTTPS. Retire it before allocating TLS
+     * and TCP buffers; the next capture/playback recreates audio via the BSP. */
+    esp_err_t release = bsp_audio_release();
+    if (err == ESP_OK) err = release;
+    ESP_LOGI(TAG, "voice resources released err=%s free=%u largest=%u dma=%u",
+             esp_err_to_name(release),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
+    return err;
+}
+
 static esp_err_t asr_stream_internal(size_t wav_bytes, char *transcript, size_t transcript_size)
 {
     const esp_partition_t *partition = voice_partition();
@@ -1036,13 +1106,9 @@ static esp_err_t asr_stream_internal(size_t wav_bytes, char *transcript, size_t 
         wav_bytes > XIGUA_AI_VOICE_MAX_WAV_BYTES) return ESP_ERR_INVALID_SIZE;
     size_t encoded = 4 * ((wav_bytes + 2) / 3);
     size_t total = strlen(s_asr_prefix) + encoded + strlen(s_asr_suffix);
-    uint8_t *input = malloc(XIGUA_AI_VOICE_FLASH_CHUNK_BYTES + 2);
-    char *encoded_buf = malloc(XIGUA_AI_VOICE_B64_CHUNK_BYTES);
-    char *body_data = calloc(1, XIGUA_AI_ASR_BODY_MAX);
-    if (!input || !encoded_buf || !body_data) {
-        free(input); free(encoded_buf); free(body_data);
-        return ESP_ERR_NO_MEM;
-    }
+    uint8_t *input = NULL;
+    char *encoded_buf = NULL;
+    char *body_data = NULL;
     ESP_LOGI(TAG, "ASR stream request bytes=%u free=%u largest=%u", (unsigned)total,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -1069,8 +1135,25 @@ static esp_err_t asr_stream_internal(size_t wav_bytes, char *transcript, size_t 
         err = esp_http_client_open(client, (int)total);
         if (err != ESP_OK) log_http_connect_diagnostics(client, "open", err);
     }
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "ASR connected free=%u largest=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        /* Certificate verification needs this heap before upload staging. */
+        input = malloc(XIGUA_AI_VOICE_FLASH_CHUNK_BYTES + 2);
+        encoded_buf = malloc(XIGUA_AI_VOICE_B64_CHUNK_BYTES);
+        if (!input || !encoded_buf) {
+            ESP_LOGW(TAG, "ASR upload allocation failed free=%u largest=%u",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+            err = ESP_ERR_NO_MEM;
+        }
+    }
+    if (err == ESP_OK) ESP_LOGI(TAG, "ASR upload starting bytes=%u dma=%u",
+                              (unsigned)total, (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
     if (err == ESP_OK) err = write_http_all(client, s_asr_prefix, strlen(s_asr_prefix));
     size_t offset = 0, carry = 0;
+    size_t progress_at = 16384;
     while (err == ESP_OK && offset < wav_bytes) {
         size_t room = XIGUA_AI_VOICE_FLASH_CHUNK_BYTES - carry;
         size_t count = wav_bytes - offset;
@@ -1089,6 +1172,13 @@ static esp_err_t asr_stream_internal(size_t wav_bytes, char *transcript, size_t 
             err = write_http_all(client, encoded_buf, output);
             carry = combined - complete;
             if (carry) memmove(input, input + complete, carry);
+            if (err == ESP_OK && offset >= progress_at) {
+                ESP_LOGI(TAG, "ASR upload progress wav=%u/%u free=%u dma=%u",
+                         (unsigned)offset, (unsigned)wav_bytes,
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
+                progress_at = offset + 16384;
+            }
         } else {
             carry = combined;
         }
@@ -1102,34 +1192,54 @@ static esp_err_t asr_stream_internal(size_t wav_bytes, char *transcript, size_t 
         else err = write_http_all(client, encoded_buf, output);
     }
     if (err == ESP_OK) err = write_http_all(client, s_asr_suffix, strlen(s_asr_suffix));
+    if (err != ESP_OK) ESP_LOGW(TAG, "ASR upload stopped wav_read=%u/%u err=%s",
+                              (unsigned)offset, (unsigned)wav_bytes, esp_err_to_name(err));
+    free(input); input = NULL;
+    free(encoded_buf); encoded_buf = NULL;
     if (err == ESP_OK) {
+        ESP_LOGI(TAG, "ASR upload finished free=%u largest=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         if (esp_http_client_fetch_headers(client) < 0) {
             err = ESP_FAIL;
             log_http_connect_diagnostics(client, "fetch_headers", err);
         }
         size_t body_length = 0;
-        while (err == ESP_OK && body_length + 1 < XIGUA_AI_ASR_BODY_MAX) {
-            char chunk[1024];
+        while (err == ESP_OK) {
+            char chunk[256];
             int read = esp_http_client_read(client, chunk, sizeof(chunk));
-            if (read <= 0) break;
-            if (body_length + (size_t)read + 1 >= XIGUA_AI_ASR_BODY_MAX) {
+            if (read < 0) { err = ESP_FAIL; break; }
+            if (read == 0) break;
+            if ((size_t)read >= XIGUA_AI_ASR_BODY_MAX - body_length) {
                 err = ESP_ERR_NO_MEM;
                 break;
             }
+            /* TLS still owns heap here: reserve only bytes actually received. */
+            char *next = realloc(body_data, body_length + (size_t)read + 1);
+            if (!next) {
+                ESP_LOGW(TAG, "ASR response allocation failed need=%u free=%u largest=%u",
+                         (unsigned)(body_length + (size_t)read + 1),
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+                err = ESP_ERR_NO_MEM;
+                break;
+            }
+            body_data = next;
             memcpy(body_data + body_length, chunk, (size_t)read);
             body_length += (size_t)read;
             body_data[body_length] = '\0';
         }
     }
     int status = client ? esp_http_client_get_status_code(client) : 0;
+    if (client) { esp_http_client_close(client); esp_http_client_cleanup(client); }
     ESP_LOGI(TAG, "ASR response status=%d err=%s body=%u", status,
-             esp_err_to_name(err), (unsigned)strlen(body_data));
+             esp_err_to_name(err), body_data ? (unsigned)strlen(body_data) : 0U);
     if (err == ESP_OK && (status < 200 || status >= 300)) {
         ESP_LOGW(TAG, "ASR error body=%.*s", 240, body_data);
         err = status == 401 || status == 403 ? ESP_ERR_INVALID_CRC : ESP_FAIL;
     }
     if (err == ESP_OK) {
-        cJSON *root = cJSON_Parse(body_data);
+        cJSON *root = body_data ? cJSON_Parse(body_data) : NULL;
         cJSON *choices = root ? cJSON_GetObjectItem(root, "choices") : NULL;
         cJSON *choice = cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : NULL;
         cJSON *message = choice ? cJSON_GetObjectItem(choice, "message") : NULL;
@@ -1140,7 +1250,6 @@ static esp_err_t asr_stream_internal(size_t wav_bytes, char *transcript, size_t 
         else xigua_text_copy(transcript, transcript_size, text->valuestring);
         cJSON_Delete(root);
     }
-    if (client) { esp_http_client_close(client); esp_http_client_cleanup(client); }
     free(input); free(encoded_buf); free(body_data);
     return err;
 }
@@ -1393,6 +1502,7 @@ static void ai_task(void *arg)
         /* Worker-owned storage: a 4 KiB reply must not live on the 6 KiB task stack. */
         static xigua_ai_result_t result;
         memset(&result, 0, sizeof(result));
+        result.story = request.story;
         result.error = ESP_FAIL;
         if (!xigua_ai_configured()) result.error = ESP_ERR_INVALID_STATE;
         else if (request.kind == XIGUA_AI_REQUEST_VOICE) {
@@ -1607,12 +1717,19 @@ xigua_ai_health_t xigua_ai_health(void)
 }
 
 bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error, bool *truncated,
-                        bool *audio_failed)
+                        bool *audio_failed, bool expected_story, bool *matching_mode)
 {
     if (!s_results || !text || text_size == 0) return false;
     /* This API has one consumer, the LVGL task. Keep its copy off that stack. */
     static xigua_ai_result_t result;
     if (xQueueReceive(s_results, &result, 0) != pdTRUE) return false;
+    bool matches = result.story == expected_story;
+    if (matching_mode) *matching_mode = matches;
+    if (!matches) {
+        ESP_LOGI(TAG, "discarding result from previous mode story=%d expected=%d",
+                 (int)result.story, (int)expected_story);
+        return true;
+    }
     if (error) *error = result.error;
     if (audio_failed) *audio_failed = result.audio_failed;
     if (result.error == ESP_OK) {

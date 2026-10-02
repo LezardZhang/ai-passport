@@ -29,6 +29,13 @@ esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch);
 // 内部 enabled 标志恢复，唤醒会重新创建 codec 并恢复音量/格式。
 esp_err_t bsp_audio_sleep(void);
 
+// Stop PCM I/O before calling. Suspend the codec and release owned codec/I2S
+// resources, including DMA buffers; the shared I2C bus and volume are retained.
+// Call bsp_audio_init() and bsp_audio_set_format() before the next PCM operation.
+// Idempotent on success. Failed channel deletion retains its handle for retry;
+// incomplete cleanup is reported rather than claiming the resources are free.
+esp_err_t bsp_audio_release(void);
+
 // deep sleep 专用：确保 I2S TX/RX 已停止，再将 MCLK/BCLK/WS/DOUT/DIN
 // 设为无上下拉的高阻输入。调用后 I2S 不能在本次运行中恢复，必须立即
 // 进入 deep sleep 或重启；不得用于 light sleep。

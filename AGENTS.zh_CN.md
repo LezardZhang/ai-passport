@@ -25,6 +25,7 @@
 ## 项目与安全基线
 
 - 目标平台：ESP32-C3、8 MB Flash、无 PSRAM、ESP-IDF 5.5.3。
+- 资源相关修改必须遵循[内存预算规则](docs/development/engineering/memory-budget.zh_CN.md)，同步更新应用分配／阶段预算。覆盖准备至清理、允许的并发、适用能力的连续块及实测预留；构建成功不能证明运行时容量充足。
 - 仓库默认分区表保持最简：只包含 NVS、PHY data，以及占用 8 MB Flash
   剩余空间的单个 factory app。用户固件可以按需求明确调整布局；修改后必须
   验证结果，不得把产品专用分区变成模板的强制契约。
@@ -48,6 +49,7 @@
 | 任意代码修改 | `docs/development/ai-guide.zh_CN.md`、相关头文件和相邻实现 |
 | 应用工作流或核心技能配置 | `skills/README.zh_CN.md`；确认五个必需技能可用，再使用匹配当前任务的技能 |
 | 环境引导或缺少工具链 | `docs/development/engineering/environment-setup.zh_CN.md` |
+| 内存、缓冲区、队列、栈、缓存、音频／网络／无线并发、素材或影响资源的依赖 | `docs/development/engineering/memory-budget.zh_CN.md`、应用当前资源预算（西瓜：`docs/assets/xigua-memory-budget.zh_CN.md`） |
 | BSP、引脚、总线、显示、音频、电池 | `docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md`、`components/bsp/include/bsp_pins.h` |
 | Demo 或菜单 | `main/demo.h`、`main/main.c`、最近的 `main/demo_*.c` 实现 |
 | 中文 UI 或字体 | `docs/development/engineering/lvgl-chinese-fonts.zh_CN.md`、应用字体素材、配置与控件样式 |

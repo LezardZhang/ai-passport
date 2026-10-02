@@ -65,9 +65,10 @@ void xigua_ai_stop_voice(void);
 xigua_ai_voice_phase_t xigua_ai_voice_phase(void);
 xigua_ai_health_t xigua_ai_health(void);
 
-/* Called from the LVGL task to collect a completed response. */
+/* Called from the LVGL task to collect a completed response. A result from
+ * another function is consumed with matching_mode=false and preserves text. */
 bool xigua_ai_take_text(char *text, size_t text_size, esp_err_t *error, bool *truncated,
-                        bool *audio_failed);
+                        bool *audio_failed, bool expected_story, bool *matching_mode);
 
 /* Serialized with ASR/TTS on the same worker. Only configured backend media is accepted. */
 esp_err_t xigua_ai_play_backend(const char *url, const char *token, const char *command_id);

@@ -203,11 +203,13 @@ LICENSE                  仓库许可证
 | [AI 技能](../skills/README.zh_CN.md) | 开发、环境准备、构建、真机测试与故障诊断 |
 | [硬件资料](hardware-design/README.zh_CN.md) | 板卡事实、接口边界、验收清单与排障 |
 | [中文字体](development/engineering/lvgl-chinese-fonts.zh_CN.md) | 字形覆盖、控件字体选择，以及中文空白排查 |
+| [内存预算规则](development/engineering/memory-budget.zh_CN.md) | 分配归属、阶段并发、RAM／Flash 预留和实机验收 |
 | [Wi-Fi 配网](development/engineering/wifi-provisioning.zh_CN.md) | 蓝牙配网实现参考与配套小程序 |
 | [社区作品与经验](reference/README.zh_CN.md) | `docs/reference/<username>/` 下的应用档案和可复用知识 |
 | [西瓜助手实施方案](assets/xigua-implementation-plan.zh_CN.md) | 派生育儿助手的产品范围、架构、阶段计划和验收条件 |
 | [西瓜助手界面设计](assets/xigua-ui-design.zh_CN.md) | 页面职责、记录流程、三键操作和服务端衔接 |
 | [西瓜项目交底](assets/xigua-project-handoff.zh_CN.md) | 当前实现、验证证据、未完成问题和接手步骤 |
+| [西瓜资源预算](assets/xigua-memory-budget.zh_CN.md) | 当前分配台账、阶段调度、规划余量和未解决容量缺口 |
 | [西瓜育儿后端](../backend/README.zh_CN.md) | Docker 部署、管理界面、记录接口、音频目录和 Hermes 接入 |
 | [参与贡献](contribution/README.zh_CN.md) | 文档、提交与 Pull Request 约定 |
 | [品牌素材](brand/README.zh_CN.md) | 产品视觉参考与[品牌说明](brand/brand-and-product.zh_CN.md) |

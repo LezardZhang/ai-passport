@@ -21,7 +21,7 @@ def capture_source(source: str) -> str:
                 line = next(lines)
                 definition += line
             definitions.append(definition)
-    for name in ("wav_put_u16", "wav_put_u32", "wav_header", "record_voice"):
+    for name in ("wav_put_u16", "wav_put_u32", "wav_header", "record_voice_internal", "record_voice"):
         match = re.search(
             rf"^static [^\n]+\b{name}\([^;]*?\)\n\{{.*?^\}}",
             source, re.MULTILINE | re.DOTALL,
@@ -58,6 +58,8 @@ static bool s_tts_cached_valid;
 static size_t header_writes, read_calls, fail_read_at;
 static bool fail_alloc, fail_write;
 static size_t allocations;
+static size_t releases;
+static bool fail_release;
 static void *capture_alloc(size_t length) {
     if (fail_alloc) return NULL;
     void *data = malloc(length);
@@ -92,6 +94,7 @@ static esp_err_t bsp_audio_set_format(unsigned hz, unsigned bits, unsigned ch) {
 }
 static esp_err_t bsp_audio_wake(void) { return ESP_OK; }
 static esp_err_t bsp_audio_sleep(void) { return ESP_OK; }
+esp_err_t bsp_audio_release(void) { ++releases; return fail_release ? ESP_FAIL : ESP_OK; }
 static esp_err_t bsp_audio_read(void *data, size_t bytes) {
     if (read_calls++ == fail_read_at) return ESP_FAIL;
     memset(data, 0x5a, bytes); return ESP_OK;
@@ -106,7 +109,8 @@ static uint32_t u32(size_t offset) {
 static void setup(bool stop, size_t failure) {
     s_voice_stop = stop; fail_read_at = failure;
     assert(allocations == 0);
-    fail_alloc = fail_write = false;
+    fail_alloc = fail_write = fail_release = false;
+    releases = 0;
     header_writes = read_calls = 0;
 }
 static void check_wav(size_t length) {
@@ -126,6 +130,7 @@ int main(void) {
     assert(record_voice(&length) == ESP_OK);
     assert(length >= 32000+44 && length <= 32000+2048+44);
     assert(!s_tts_cached_valid);
+    assert(releases == 1);
     check_wav(length);
     assert(allocations == 0);
     setup(false, SIZE_MAX);
@@ -134,12 +139,15 @@ int main(void) {
     assert(allocations == 0);
     setup(false, 1);
     assert(record_voice(&length) == ESP_FAIL && header_writes == 0);
+    assert(releases == 1);
     assert(flash[0] == 0xff && flash[43] == 0xff);
     assert(allocations == 0);
     setup(false, SIZE_MAX); fail_alloc = true;
     assert(record_voice(&length) == ESP_ERR_NO_MEM && allocations == 0 && read_calls == 0);
     setup(false, SIZE_MAX); fail_write = true;
     assert(record_voice(&length) == ESP_FAIL && allocations == 0 && header_writes == 0);
+    setup(true, SIZE_MAX); fail_release = true;
+    assert(record_voice(&length) == ESP_FAIL && allocations == 0 && releases == 1);
     assert(record_voice(NULL) == ESP_ERR_INVALID_ARG);
     puts("Xigua voice capture NOR Flash/WAV tests: PASS");
     return 0;

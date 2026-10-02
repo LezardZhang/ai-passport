@@ -1,5 +1,6 @@
 #include "xigua_backend.h"
 #include "xigua_backend_config.h"
+#include "xigua_app.h"
 #include "xigua_catalog.h"
 #include "xigua_ai.h"
 #include "xigua_wifi.h"
@@ -167,6 +168,12 @@ static void poll_command(void)
                     xigua_backend_report_playback(id->valuestring,"error","cannot queue audio");
                 }
             }
+        } else if (!strcmp(action->valuestring,"clear_records")) {
+            esp_err_t err=xigua_app_clear_local_records();
+            xigua_backend_report_playback(id->valuestring,err==ESP_OK?"complete":"error",
+                err==ESP_OK?NULL:esp_err_to_name(err));
+            snprintf(s_last_command,sizeof(s_last_command),"%s",id->valuestring);
+            status_text(err==ESP_OK?"本地记录已清除":"本地记录清除失败");
         }
     }
     cJSON_Delete(root);
