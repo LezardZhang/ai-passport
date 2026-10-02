@@ -203,6 +203,11 @@ LICENSE                  Repository license
 Engineering and contribution guides define the rules; examples and archives
 provide reference material. Choose the entry that matches your task.
 
+For this fork's `feature/xigua-childcare` application, start with the
+[Xigua project README](../README.md). It describes the current device/backend,
+setup, controls and acceptance gaps; the platform overview above describes the
+upstream hardware-test baseline and its reusable references.
+
 | Resource | What you will find |
 | --- | --- |
 | [Development](development/README.md) | AI workflow, engineering conventions, CI, and release guidance |
