@@ -1,10 +1,10 @@
 {
   "package_name": "cn.xigua.childcare",
-  "version_code": 17,
-  "version_name": "0.7.0-cloud",
+  "version_code": 18,
+  "version_name": "0.7.1-cloud",
   "min_sdk": 26,
-  "size_bytes": 1226132,
-  "sha256": "1abd16b23dc8dd08d81bef7f62672c271c2faf45a9bd12efcb25b0aaf278ab78",
+  "size_bytes": 1222036,
+  "sha256": "859520afde9b155f6aad41b687b7766c1c3a2ba561ea950f6d22663dba596c9c",
   "certificate_sha256": "b9ba60dca0104e1968bdd6fa46e9459799bb2e4b69f2dd8d41c14a70321917a9",
-  "notes": "0.7.0-cloud：自动检查更新；音频库改为底部一级入口并接入儿歌、故事、古典音乐云端目录；新增带西瓜色彩点缀的彩色操作图标和标准齿轮；按文字、ASR、TTS、视觉理解、JEV 分开配置服务；同步支持立即开始、暂停、恢复和明确状态；语音改为结束/取消分离并清除上一段识别内容；应用重启后不会卡在旧的同步进行中状态。\n"
+  "notes": "0.7.1-cloud：全应用统一图标；照护首页移除声音与故事区域；语音输入不再恢复或保留上一轮文字与录音缓存。\n"
 }
