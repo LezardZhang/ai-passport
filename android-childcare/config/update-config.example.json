@@ -1,0 +1,7 @@
+{
+  "manifest_url": "https://162.14.108.234/android-updates/latest.json",
+  "legacy_manifest_url": "https://162.14.108.234/cloud-backup/android-childcare-updates/latest.json",
+  "download_token": "",
+  "legacy_download_token": "",
+  "channel": "android-updates-v2"
+}

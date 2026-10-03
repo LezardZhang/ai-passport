@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 3,
+  "name": "Xigua Warm Care",
+  "date": "2026-10-03",
+  "prototypeViewport": {
+    "width": 390,
+    "height": 844
+  },
+  "color": {
+    "day": {
+      "background": "#FAF8F3",
+      "surface": "#FFFFFF",
+      "text": "#233B33",
+      "textSecondary": "#667267",
+      "primary": "#214E43",
+      "onPrimary": "#FFFFFF",
+      "divider": "#E7E9E1",
+      "greenTint": "#E8EEE4",
+      "peachTint": "#F4D9C8",
+      "peachText": "#78533F",
+      "lavenderTint": "#E8E6F1",
+      "lavenderText": "#66587C",
+      "error": "#A24635"
+    },
+    "night": {
+      "background": "#15241F",
+      "surface": "#1E3028",
+      "text": "#E8ECE2",
+      "textSecondary": "#A4B2A5",
+      "primary": "#B6D0B0",
+      "onPrimary": "#18362B",
+      "divider": "#33443A",
+      "greenTint": "#2B4034",
+      "peachTint": "#493A30",
+      "peachText": "#E8B89B",
+      "lavenderTint": "#353441",
+      "lavenderText": "#C5B9DA",
+      "error": "#E0A290"
+    }
+  },
+  "spacingDp": {
+    "pageHorizontal": 20,
+    "sectionGap": 24,
+    "relatedGap": 12,
+    "compactGap": 8,
+    "rowVertical": 12,
+    "minimumTapTarget": 48
+  },
+  "radiusDp": {
+    "hero": 24,
+    "group": 20,
+    "button": 16,
+    "input": 13,
+    "sheetTop": 26,
+    "chip": 20
+  },
+  "typographySp": {
+    "pageTitle": 24,
+    "sectionTitle": 16,
+    "body": 16,
+    "rowTitle": 14,
+    "button": 14,
+    "secondary": 12,
+    "timer": 48
+  },
+  "componentDp": {
+    "primaryButtonMinHeight": 50,
+    "rowMinHeight": 70,
+    "bottomNavigationMinHeight": 64,
+    "miniPlayerMinHeight": 64,
+    "icon": 22
+  },
+  "motionMs": {
+    "pageTransition": 180,
+    "statusFade": 120,
+    "undoVisible": 7000
+  },
+  "resources": {
+    "audioCacheMiB": 256,
+    "audioImportMaxMiB": 128,
+    "recordingMaxSeconds": null,
+    "timelineVisibleRows": 100,
+    "jsonMaxMiB": 1,
+    "aiTextMaxChars": 12000,
+    "recordingPolicy": "User controlled; bounded disk segments; surface actual device/provider failures"
+  },
+  "font": "Android system sans-serif with system CJK fallback; all text uses sp",
+  "icons": {
+    "prototype": "Lucide 0.468.0 (ISC)",
+    "implementation": "Use a coherent vector icon set; preserve semantic descriptions"
+  },
+  "navigation": {
+    "roots": [
+      "care",
+      "records",
+      "household"
+    ],
+    "unifiedInput": [
+      "voice",
+      "systemIme"
+    ],
+    "intentMutationsRequirePreview": true
+  },
+  "voiceComposer": {
+    "states": [
+      "idle",
+      "recording",
+      "transcribing",
+      "ready",
+      "sending",
+      "error",
+      "interrupted"
+    ],
+    "sendDuringRecording": "stop capture and queue exactly one send after transcription",
+    "sendDuringTranscribing": "queue the same send; do not validate empty view text",
+    "stopWithoutSend": "editable ready draft",
+    "cancel": "invalidate pending send and late session callbacks"
+  },
+  "aiServices": {
+    "familyEntry": true,
+    "defaultProfile": "Owner-authorized Token Plan key paired with its matching dedicated base URL; no value in this design",
+    "multipleProfiles": true,
+    "modelDiscovery": "/models with loading, empty, failure and manual model-ID fallback",
+    "bindings": [
+      "independent chat profile/model",
+      "independent ASR profile/model"
+    ],
+    "credentialDisplay": "masked",
+    "availability": "configuration/model list success does not prove each capability"
+  }
+}

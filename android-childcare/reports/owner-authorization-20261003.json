@@ -1,0 +1,46 @@
+{
+  "recorded_at": "2026-10-03T21:18:57.713854+08:00",
+  "authorization_date": "2026-10-03",
+  "provenance": {
+    "kind": "owner authorization relayed by backend coordination task",
+    "source_thread_id": "01a0fd0e-7c7c-7761-b5a2-27fc30907d1f",
+    "reported_owner_reply": "长期授权"
+  },
+  "project": "Xigua Childcare private Android APK and existing 162.14.108.234 update service",
+  "standing_authorized_actions": [
+    "Routine Android builds and original-signer verification",
+    "Publication to the existing private update channel",
+    "Local and scoped server publishing-credential configuration",
+    "Previously authorized limited token reads and embedding of application/download/business tokens in the private APK",
+    "Related private-project Git synchronization"
+  ],
+  "existing_scope": {
+    "update_root": "/home/clouddata/android-childcare-updates/",
+    "proxy": "Related HTTPS configuration and dedicated update routes",
+    "business_credential": "PERSONAL_CHILDCARE_TOKEN only, from cockpit-cloud-cloud-backup-1",
+    "family_data": "Baby profile and care data through existing authorized interfaces"
+  },
+  "boundaries": [
+    "Do not print credential values in logs, reports or summaries",
+    "Publishing credentials remain outside the APK",
+    "No administrator keys, adult profiles, unrelated files or other applications",
+    "No expansion to business-database changes or public credential distribution",
+    "Preserve unrelated working-tree changes",
+    "Runtime tool approvals and current Chrome/1Panel coordination restrictions still apply"
+  ],
+  "applied_actions": [
+    "Recorded standing authorization in paired project cloud-update documentation and linked it from Android README"
+  ],
+  "no_actions": [
+    "No credential values read or printed",
+    "No build, signing, server operation or publication",
+    "No Git commit or push"
+  ],
+  "unchanged_acceptance": {
+    "latest_published": "code13 / 0.6.6-cloud",
+    "phone": "Code13 physical install unverified; last ADB check had no devices",
+    "family_sync": "Dedicated business credential absent; real sync remains unverified",
+    "incremental_sync_audit": "PASS; no new release needed"
+  },
+  "credentials_exposed": false
+}

@@ -1,0 +1,48 @@
+{
+  "recorded_at": "2026-10-03T10:02:17.921459+00:00",
+  "version_code": 12,
+  "version_name": "0.6.5-cloud",
+  "primary_base": "https://162.14.108.234/android-updates",
+  "legacy_base": "https://162.14.108.234/cloud-backup/android-childcare-updates",
+  "server_public_base": "https://162.14.108.234/android-updates (deployment reported by coordinating task)",
+  "production_operation": "read-only verification; no production mutations",
+  "publisher_configuration": "primary updated; credentials and signer retained",
+  "republished": false,
+  "version_incremented": false,
+  "aliases": {
+    "primary": {
+      "health_http": 200,
+      "unauthenticated_manifest_http": 401,
+      "manifest_http": 200,
+      "alias_apk_http": 200,
+      "alias_apk_url": "https://162.14.108.234/android-updates/apks/12-4a2b32b3bdcf4265e2a858818f61e0090cc20d016bafe0d98b67e6844f2db934.apk",
+      "manifest_apk_url": "https://162.14.108.234/cloud-backup/android-childcare-updates/apks/12-4a2b32b3bdcf4265e2a858818f61e0090cc20d016bafe0d98b67e6844f2db934.apk",
+      "bytes": 287409,
+      "sha256": "4a2b32b3bdcf4265e2a858818f61e0090cc20d016bafe0d98b67e6844f2db934",
+      "matches_signed_local_apk": true
+    },
+    "legacy": {
+      "health_http": 200,
+      "unauthenticated_manifest_http": 401,
+      "manifest_http": 200,
+      "alias_apk_http": 200,
+      "alias_apk_url": "https://162.14.108.234/cloud-backup/android-childcare-updates/apks/12-4a2b32b3bdcf4265e2a858818f61e0090cc20d016bafe0d98b67e6844f2db934.apk",
+      "manifest_apk_url": "https://162.14.108.234/cloud-backup/android-childcare-updates/apks/12-4a2b32b3bdcf4265e2a858818f61e0090cc20d016bafe0d98b67e6844f2db934.apk",
+      "bytes": 287409,
+      "sha256": "4a2b32b3bdcf4265e2a858818f61e0090cc20d016bafe0d98b67e6844f2db934",
+      "matches_signed_local_apk": true
+    }
+  },
+  "manifests_identical": true,
+  "current_manifest_note": "Immutable code12 metadata retains the legacy APK URL; both artifact aliases work. Subsequent releases use the server primary base without republishing code12.",
+  "phone": {
+    "model": "SM-S9280",
+    "version_code": 12,
+    "version_name": "0.6.5-cloud",
+    "automatic_checks_enabled": true,
+    "startup_query": "PASS: latest-version state observed before any manual query in this verification",
+    "last_successful_check_display": "2026/10/3 17:55",
+    "manual_query": "NOT RUN: phone foreground changed during later navigation; no forced settings or database timestamp changes",
+    "runtime_source": "Not exposed in the normal UI; fallback use cannot be distinguished from the displayed state alone."
+  }
+}

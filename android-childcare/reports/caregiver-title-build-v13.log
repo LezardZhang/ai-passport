@@ -1,0 +1,20 @@
+Note: Some input files use or override a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+APK: build/apk/xigua-childcare-0.6.6-cloud.apk SHA256: bf5399e831a5857391551f80cb37bdb06ce108c67200d8a7620b7c6b590e6c08
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+Signer #1 certificate DN: CN=Xigua Childcare Local Development, O=Personal
+Signer #1 certificate SHA-256 digest: b9ba60dca0104e1968bdd6fa46e9459799bb2e4b69f2dd8d41c14a70321917a9
+Signer #1 certificate SHA-1 digest: 69e607799a3f7f82a7abebddba62371fe9fdd6eb
+Signer #1 certificate MD5 digest: c4afca5a1808f07f964297cc23e99382
+Signer #1 key algorithm: RSA
+Signer #1 key size (bits): 3072
+Signer #1 public key SHA-256 digest: 470a0a9e83635dd35f3f29774a37515b48e723f2cedf7d63cf031e03ac0ad16a
+Signer #1 public key SHA-1 digest: 0db214ccc7a1983e9ad8e5354c315fdb81ac1921
+Signer #1 public key MD5 digest: 3735803ef4bc259cdc6931523a22297b

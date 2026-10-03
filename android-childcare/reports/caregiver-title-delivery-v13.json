@@ -1,0 +1,41 @@
+{
+  "recorded_at": "2026-10-03T10:17:51.506132+00:00",
+  "version_name": "0.6.6-cloud",
+  "version_code": 13,
+  "primary_base": "https://162.14.108.234/android-updates",
+  "legacy_base": "https://162.14.108.234/cloud-backup/android-childcare-updates",
+  "aliases": {
+    "primary": {
+      "manifest_http": 200,
+      "apk_http": 200,
+      "bytes": 287409,
+      "sha256": "bf5399e831a5857391551f80cb37bdb06ce108c67200d8a7620b7c6b590e6c08",
+      "manifest_apk_url": "https://162.14.108.234/android-updates/apks/13-bf5399e831a5857391551f80cb37bdb06ce108c67200d8a7620b7c6b590e6c08.apk",
+      "matches_signed_local_apk": true
+    },
+    "legacy": {
+      "manifest_http": 200,
+      "apk_http": 200,
+      "bytes": 287409,
+      "sha256": "bf5399e831a5857391551f80cb37bdb06ce108c67200d8a7620b7c6b590e6c08",
+      "manifest_apk_url": "https://162.14.108.234/android-updates/apks/13-bf5399e831a5857391551f80cb37bdb06ce108c67200d8a7620b7c6b590e6c08.apk",
+      "matches_signed_local_apk": true
+    }
+  },
+  "credentials_exposed": false,
+  "family_sync_token_present": false,
+  "device": {
+    "physical_install": "NOT RUN: phone absent from ADB after owner reported reconnect; local USB product list also has no Samsung phone",
+    "isolated_caregiver_tests": "PASS 16 assertions",
+    "native_registration": "PASS single input and sentence; screenshot visually inspected",
+    "last_connection_check_at": "2026-10-03T10:25:09.185614+00:00"
+  },
+  "manifests_identical": true,
+  "validation": {
+    "android_build": "PASS",
+    "host_assertions": 134,
+    "isolated_android_caregiver_assertions": 16,
+    "repository_text_checks": "PASS",
+    "repository_complete_gate": "PASS; see repository-gate-update-migration-v12.log; no firmware changes in caregiver feature"
+  }
+}

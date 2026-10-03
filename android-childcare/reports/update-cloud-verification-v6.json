@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "standard_tls_verification": true,
+  "latest_version": "0.5.1-cloud",
+  "version_code": 6,
+  "cloud_apk_sha256": "a8b5a54babc425badf5b97fc204ab9e9b85664d0e6af1133226c418701af1fa2",
+  "cloud_apk_bytes": 279140,
+  "unauthenticated_apk_denied": 401,
+  "download_credential_denied_owner_history": 401,
+  "owner_history_access": 200,
+  "checked_at": "2026-10-03T07:18:57.078229+00:00"
+}

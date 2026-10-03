@@ -1,0 +1,20 @@
+<p align="right"><a href="phone-v3-design.zh_CN.md">简体中文</a> · <strong>English</strong></p>
+
+# Android phone architecture v3
+
+The owner requires working voice submission, no fixed 60-second recording cutoff, Android-specific module design, removal of hardware provisioning/admin concepts, and built-in applicable credentials in this private app. Existing authorization permits autonomous implementation. Preserve installed data, package and signer; backend/firmware and concurrent work remain untouched. No commit/push/publication.
+
+## Daily modules
+Care owns one durable composer for typed/recorded intent, confirmations and request replies. Records owns timeline, dates, summaries and edit/delete/undo; transport revisions/page-size diagnostics leave daily prose. Family owns baby/caregiver lifecycle, appearance, notification/backup preferences and version maintenance. Media and reminders are secondary care tools using Android document selection, media session/focus, notification permission and scheduling. Wi-Fi/Bluetooth provisioning, board state and hardware menus have no role in this phone app. Android source currently contains no Bluetooth/provisioning capability; retain that absence. Android networking needs no stored Wi-Fi profiles.
+
+Family has an intentional AI Services settings module: user-managed named URL/key profiles, independently selected chat/ASR services and models, authenticated GET /models discovery with manual model-ID fallback. Tracked assets initialize the matching Token Plan URL and existing owner-authorized key. Edits affect subsequent operations; current requests use frozen configuration. Existing private settings migrate when populated. Update settings show installed version and signed package import; online channel is built-in when supplied. Unconfigured cloud identity/release services remain accurate, not simulated successful accounts/updates. The fixed-profile backend has no remote member identity API, so local caregivers remain attribution only.
+
+## Speech ownership
+A pure SpeechSession owns phase, generation and one pending Send. Recording+Send stops capture then waits; transcribing+Send queues once; ready text is routed once; stale/cancelled/error results never dispatch. Empty validation applies only without pending audio. The view is retained through periodic/app refresh while voice owns it. Permission grant continues the requested attempt; denial is an explicit error.
+
+Capture writes 16kHz mono PCM until the user stops, without a fixed time cutoff. A 64MiB file/storage reserve bounds phone disk use, not a visible timer. After closing/releasing AudioRecord, long WAVs are streamed into bounded ASR chunks and transcripts combined. Only one speech transport is live at a time. Completed audio survives provider/network failure as one private draft with Retry/Discard; user Cancel removes owned pending audio and callbacks. Background stops active capture and invalidates submission; it preserves a completed retry draft. Microphone stays foreground-only.
+
+Provider configuration is validated before microphone start. Missing authorization must never look like a successful recording/transcription. Owner-authorized appropriate keys are embedded directly in the private asset, with values absent from routine logs/documents. The owner explicitly directs use of the existing Token Plan key at its matching dedicated endpoint, overriding the earlier ordinary-key dependency. Configure that exact pair; ordinary-key profiles and other compatible endpoints remain freely configurable. No new local-only credential restriction is imposed.
+
+## Validation
+Host regressions cover Send while recording/transcribing, single dispatch, late results, failure/retry/cancel and long WAV chunk boundaries. Android instrumentation uses real AudioRecord plus an injectable speech transport for deterministic UI success/error/pending scenarios, without private speech or keys. Run final signed APK checks, emulator UI and full repository gate; upgrade the identified phone preserving data. Real provider requests and actual speech must be reported separately from fixture success.

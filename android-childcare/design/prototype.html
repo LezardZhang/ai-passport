@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#FAF8F3">
+  <title>西瓜育儿 · 手机交互设计原型</title>
+  <link rel="stylesheet" href="prototype.css">
+  <script defer src="vendor/lucide.min.js"></script>
+  <script defer src="prototype.js"></script>
+</head>
+<body>
+  <div class="studio">
+    <aside class="studio-nav">
+      <div class="wordmark"><span class="brand-mark">瓜</span><div>西瓜育儿<small>ANDROID · DESIGN PROTOTYPE</small></div></div>
+      <h1>把照护，<br>放轻一点。</h1>
+      <p>温暖、清楚、随手可记。<br>一名宝宝，一个入口，跟上整个家的节奏。</p>
+      <nav aria-label="原型页面" id="studio-pages"></nav>
+      <div class="prototype-note">这是可交互的设计演示。示例记录、录音、AI 回复和播放用于展示，不调用麦克风或线上服务。人物登记仅保存在此浏览器，独立于真实 App。</div>
+    </aside>
+    <div class="preview-zone">
+      <div class="preview-caption"><span>WARM CARE / 390 × 844</span><button class="theme-button" data-action="theme" aria-label="切换夜间模式"><i data-lucide="moon"></i><span>夜间模式</span></button></div>
+      <div class="phone" id="phone">
+        <div class="system-bar"><b>21:40</b><div><i data-lucide="signal"></i><i data-lucide="wifi"></i><i data-lucide="battery-full"></i></div></div>
+        <header id="app-header"></header>
+        <main id="screen" tabindex="-1"></main>
+        <div id="mini-player"></div>
+        <nav class="bottom-nav" id="bottom-nav" aria-label="主要导航"></nav>
+        <div class="gesture-bar"><span></span></div>
+        <div id="overlay"></div>
+        <div id="toast" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+    <aside class="inspection">
+      <div class="eyebrow">DESIGN INTENT</div>
+      <h2 id="design-heading">先看见宝宝的状态</h2>
+      <p id="design-description">活动中的睡眠和快捷记录靠近拇指；统计、提醒和交接作为支持信息。</p>
+      <div class="swatches"><span style="background:#214E43"></span><span style="background:#F4D9C8"></span><span style="background:#E8EEE4"></span><span style="background:#FAF8F3"></span></div>
+      <div class="spec-values"><div><b>48 dp</b><span>最小操作高度</span></div><div><b>20 dp</b><span>页面水平留白</span></div><div><b>3</b><span>稳定的底部入口</span></div></div>
+      <h3>状态演示</h3>
+      <label class="demo-toggle"><span>示例历史（关闭时为空档案）</span><input type="checkbox" id="empty-demo"></label>
+      <label class="demo-toggle"><span>大字模式（130%）</span><input type="checkbox" id="large-demo"></label>
+      <label class="demo-toggle"><span>断网 / 待同步</span><input type="checkbox" id="offline-demo"></label>
+      <label class="demo-toggle"><span>麦克风权限被拒绝</span><input type="checkbox" id="permission-demo"></label>
+      <label class="demo-toggle"><span>下一次操作失败</span><input type="checkbox" id="failure-demo"></label>
+      <button class="small-button" data-action="reset">重置示例</button>
+      <p class="inspection-small">日期：2026 年 10 月 3 日<br>Asia/Shanghai<br>原型控件可点击，内容区可滚动。</p>
+    </aside>
+  </div>
+</body>
+</html>

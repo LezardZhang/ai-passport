@@ -1,0 +1,30 @@
+{
+  "status": "DEPLOYED",
+  "service": "xigua-android-updates-android-updates-1",
+  "loopback_port": 8916,
+  "proxy_container": "1Panel-openresty-ahKZ",
+  "new_route": "/opt/1panel/www/sites/docforge/proxy/android-childcare-updates.conf",
+  "proxy_backup": "/home/clouddata/android-childcare-updates/proxy-backup-20261003T071444Z",
+  "existing_config_hashes": {
+    "/opt/1panel/www/conf.d/docforge.conf": "32723e4281b95636208d8dea90f960fdf09025483098e64980d3f626e1f9d340",
+    "/opt/1panel/www/sites/docforge/proxy/cloud-backup.conf": "ec779ab360efa7e0cd77e2b731894e8a357fa0cb3935fd00807ee700272142ca"
+  },
+  "new_route_sha256": "8eda822302d8d09ccf5cd51a37ac7721cb9ff46b4b1f2e9185675030272696bb",
+  "existing_business_data": "NOT ACCESSED OR MODIFIED",
+  "nginx_validation": "PASS",
+  "nginx_reload": "PASS",
+  "deployed_at": "2026-10-03T07:14:44.274270+00:00",
+  "container_health": "healthy",
+  "image_id": "sha256:08e00c8b8afed4e7546f97c0d7a027dd1a4f6febddb8dd487d994b39af84abfa",
+  "resource_sample": {
+    "BlockIO": "4.1kB / 291kB",
+    "CPUPerc": "0.13%",
+    "Container": "xigua-android-updates-android-updates-1",
+    "ID": "e531349ce321",
+    "MemPerc": "17.07%",
+    "MemUsage": "32.77MiB / 192MiB",
+    "Name": "xigua-android-updates-android-updates-1",
+    "NetIO": "289kB / 8.38kB",
+    "PIDs": "2"
+  }
+}

@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="cn.xigua.childcare.test" android:versionCode="1" android:versionName="0.1.0-test">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:label="Xigua isolated tests" android:usesCleartextTraffic="true" />
+    <instrumentation android:name="cn.xigua.childcare.StoreInstrumentation" android:targetPackage="cn.xigua.childcare" android:label="Isolated database and contract integration" />
+    <instrumentation android:name="cn.xigua.childcare.LiveProviderInstrumentation" android:targetPackage="cn.xigua.childcare" android:label="Generated-phrase live provider acceptance" />
+    <instrumentation android:name="cn.xigua.childcare.TimelineInstrumentation" android:targetPackage="cn.xigua.childcare" android:label="Caregiver timeline acceptance" />
+    <instrumentation android:name="cn.xigua.childcare.TimelineUiInstrumentation" android:targetPackage="cn.xigua.childcare" android:label="Native timeline and caregiver picker" />
+    <instrumentation android:name="cn.xigua.childcare.UpdateInstrumentation" android:targetPackage="cn.xigua.childcare" android:label="Private cloud update acceptance" />
+    <instrumentation android:name="cn.xigua.childcare.UpdateInstallInstrumentation" android:targetPackage="cn.xigua.childcare" android:label="Local HTTPS and Android installer acceptance" />
+</manifest>

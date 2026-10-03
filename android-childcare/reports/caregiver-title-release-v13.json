@@ -1,0 +1,10 @@
+{
+  "package_name": "cn.xigua.childcare",
+  "version_code": 13,
+  "version_name": "0.6.6-cloud",
+  "min_sdk": 26,
+  "size_bytes": 287409,
+  "sha256": "bf5399e831a5857391551f80cb37bdb06ce108c67200d8a7620b7c6b590e6c08",
+  "certificate_sha256": "b9ba60dca0104e1968bdd6fa46e9459799bb2e4b69f2dd8d41c14a70321917a9",
+  "notes": "0.6.6-cloud：照护者登记简化为“我是孩子的 ___”，只需一个称谓，不再填写姓名和联系电话。新照护记录与云端上传使用爸爸、爷爷、奶奶等称谓，旧记录归属保持不变。\n"
+}

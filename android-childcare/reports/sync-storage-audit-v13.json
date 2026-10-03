@@ -1,0 +1,78 @@
+{
+  "audited_at": "2026-10-03T20:35:45.797245+08:00",
+  "scope": "Local code13 source, APK and publisher configuration audit; no production writes or new publication",
+  "version_code": 13,
+  "version_name": "0.6.6-cloud",
+  "apk_sha256": "bf5399e831a5857391551f80cb37bdb06ce108c67200d8a7620b7c6b590e6c08",
+  "apk_bytes": 287409,
+  "source_verification": {
+    "app/src/main/java/cn/xigua/childcare/Api.java": {
+      "sha256": "5db8ee4d4166fd73bcc464d99655d92768e4fd0f4e19a78b8a4235ff7698496b",
+      "matches_code13_build_manifest": true
+    },
+    "app/src/main/java/cn/xigua/childcare/SyncService.java": {
+      "sha256": "5c6bb26f8521246dd14ee8a493687f6e2b381b03ef604a970573a7b82fe6fac5",
+      "matches_code13_build_manifest": true
+    },
+    "app/src/main/java/cn/xigua/childcare/Store.java": {
+      "sha256": "e7f7415c8b64cde417a87823956427c5d6a8b8392c16e6e3e7fa1a7f952ebe56",
+      "matches_code13_build_manifest": true
+    },
+    "app/src/main/java/cn/xigua/childcare/MainActivity.java": {
+      "sha256": "05450babf098be11202d05feba47c47de5af5896d3e78e3a97a1cefb2a41a852",
+      "matches_code13_build_manifest": true
+    },
+    "app/src/main/java/cn/xigua/childcare/BackupArchive.java": {
+      "sha256": "f52d9205546bad10ea668eb06a284d7d841464dd70b156a9fca61e76f909e95e",
+      "matches_code13_build_manifest": true
+    },
+    "app/src/main/java/cn/xigua/childcare/CareApp.java": {
+      "sha256": "775a7b446835b03a58d5ab9c874a8c4dc38890b455644008da000bb6fd180a7e",
+      "matches_code13_build_manifest": true
+    },
+    "app/src/main/java/cn/xigua/childcare/Updates.java": {
+      "sha256": "c232b0337a539d78dc11f65daa3a79901cac2adccf8c6e8e0e194e6088df30ce",
+      "matches_code13_build_manifest": true
+    },
+    "app/src/main/java/cn/xigua/childcare/UpdatesUi.java": {
+      "sha256": "45bf6cd0bc8a900276526ddaaf02b0ada27309d64e00b35b65dd2e28d01874b8",
+      "matches_code13_build_manifest": true
+    },
+    "app/src/main/AndroidManifest.xml": {
+      "sha256": "5f165f71348568f225e8de401d029f1f70c2efb9789bdfe17bf3a328d04fb3b5",
+      "matches_code13_build_manifest": true
+    }
+  },
+  "care_sync": {
+    "base_url": "https://162.14.108.234/cloud-backup/app/v1",
+    "upload": "POST /sync/push, JSON with one pending outbox operation per request; max 100 operations per sync run",
+    "pull": "GET /sync/pull using cursor, profile_id=baby, limit=100",
+    "ack": "Applied receipt removes acknowledged outbox row",
+    "retry": "Frozen payload and operation_id retained until receipt; retry may resend same operation",
+    "automatic_zip_upload": false,
+    "built_in_family_token_present": false,
+    "other_requests": "Capabilities, family profile and profile generation GET; optional existing/new AI jobs use separate JSON requests, never ZIP"
+  },
+  "zip_backup": {
+    "trigger": "Explicit export button, ACTION_CREATE_DOCUMENT, RESULT_OK request 51",
+    "destination": "User-selected document URI; not automatic Cloud Backup upload",
+    "callers": [
+      {
+        "file": "app/src/main/java/cn/xigua/childcare/MainActivity.java",
+        "line": 165
+      }
+    ],
+    "android_system_backup_enabled": false
+  },
+  "apk_release": {
+    "primary_manifest_url": "https://162.14.108.234/android-updates/latest.json",
+    "legacy_manifest_url": "https://162.14.108.234/cloud-backup/android-childcare-updates/latest.json",
+    "publisher_base": "https://162.14.108.234/android-updates",
+    "publication": "Explicit local publisher POST /publish; not available from Android app",
+    "storage": "Independent update service, /releases volume; both update routes proxy port 8916",
+    "automatic_update": "GET manifest only, at most once per six hours; APK download requires explicit action"
+  },
+  "result": "PASS; no repeated whole-archive upload found, no application change or new APK needed",
+  "device": "ADB has no connected devices; code13 physical install remains pending",
+  "credentials_exposed": false
+}

@@ -1,0 +1,12 @@
+.local/
+build/
+.gradle/
+local.properties
+*.jks
+*.keystore
+__pycache__/
+*.pyc
+.DS_Store
+app/src/main/assets/mimo-config.json
+app/src/main/assets/update-config.json
+app/src/main/assets/family-cloud-config.json

@@ -1,0 +1,4 @@
+PASS 81 core assertions
+PASS 31 speech lifecycle/long WAV assertions
+PASS 8 provider configuration assertions
+PASS 14 timeline assertions

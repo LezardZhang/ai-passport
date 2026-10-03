@@ -1,0 +1,16 @@
+{
+  "providers": [
+    {
+      "id": "builtin-mimo",
+      "name": "MiMo Token Plan",
+      "base": "https://token-plan-cn.xiaomimimo.com/v1",
+      "key": "",
+      "chat_model": "mimo-v2.6-flash",
+      "asr_model": "mimo-v2.5-asr",
+      "auth": "api-key",
+      "asr_protocol": "mimo",
+      "revision": 1
+    }
+  ],
+  "update_channel": ""
+}
