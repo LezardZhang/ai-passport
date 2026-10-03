@@ -4,6 +4,8 @@ COPY --from=cloud_backup . /opt/cloud-backup
 COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --no-index --find-links=/opt/cloud-backup/vendor/wheels/linux-x86_64-cp312 --require-hashes -r /opt/cloud-backup/requirements.lock
 COPY app ./app
+COPY assets ./assets
+COPY migrations /app/personal-migrations
 COPY web ./web
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/opt/cloud-backup/src
@@ -11,7 +13,11 @@ ENV CLOUDBACKUP_ADMIN_UI=/opt/cloud-backup/admin/index.html
 ENV CLOUDBACKUP_SKILL_DIR=/opt/cloud-backup/skills/cloud-backup-integrator
 ENV CLOUDBACKUP_PROTOCOL_PATH=/opt/cloud-backup/docs/CLOUD-BACKUP-PROTOCOL.md
 ENV CLOUDBACKUP_MIGRATIONS_DIR=/opt/cloud-backup/migrations
+ENV PERSONAL_MIGRATIONS_DIR=/app/personal-migrations
+ENV PERSONAL_DB=/config/personal.db
+ENV PERSONAL_MEDIA_DIR=/personal-media
 ENV CHILDCARE_DB=/config/childcare.db
 ENV CHILDCARE_MEDIA_DIR=/childcare-media
+ENV CHILDCARE_SEED_BUILTIN_AUDIO=1
 EXPOSE 8080
 CMD ["uvicorn", "app.unified:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

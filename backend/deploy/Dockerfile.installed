@@ -1,7 +1,13 @@
 ARG BACKUP_IMAGE
 FROM ${BACKUP_IMAGE}
 COPY app /app/app
+COPY assets /app/assets
+COPY migrations /app/personal-migrations
 COPY web /app/web
+ENV PERSONAL_MIGRATIONS_DIR=/app/personal-migrations
+ENV PERSONAL_DB=/config/personal.db
+ENV PERSONAL_MEDIA_DIR=/personal-media
 ENV CHILDCARE_DB=/config/childcare.db
 ENV CHILDCARE_MEDIA_DIR=/childcare-media
+ENV CHILDCARE_SEED_BUILTIN_AUDIO=1
 CMD ["python", "-m", "uvicorn", "app.unified:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

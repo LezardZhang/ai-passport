@@ -19,7 +19,7 @@ final class UpdatesUi {
   u.add(card,u.label(app.store.get("update_status",connected?"已接入云端更新。":"在线更新尚未接入。")),10);
   long checked=0;try{checked=Long.parseLong(app.store.get("update_last_checked","0"));}catch(Exception ignored){}
   if(checked>0)u.add(card,u.label("上次检查："+DateFormat.getDateTimeInstance(DateFormat.SHORT,DateFormat.SHORT).format(new Date(checked))),8);
-  if(connected){CheckBox automatic=new CheckBox(a);automatic.setText("自动检查新版本");automatic.setTextColor(u.ink);automatic.setChecked("1".equals(app.store.get("update_automatic","1")));automatic.setOnCheckedChangeListener((v,on)->{app.store.set("update_automatic",on?"1":"0");if(on)Updates.maybeCheck(app);});u.add(card,automatic,12);u.add(card,u.label("打开应用时检查，最多每 6 小时一次。有新版会显示提醒，下载和安装由你确认。"),4);if(!busy)u.add(body,u.button("检查更新",true,()->app.network.execute(()->Updates.checkChannel(app))),12);}
+  if(connected){app.store.set("update_automatic","1");u.add(card,u.label("已开启自动检查。每次打开应用并在后台恢复时会检查更新，最多每 6 小时一次。"),12);u.add(card,u.label("发现新版本后会在这里显示；下载和安装仍由你确认。"),4);}
   String release=app.store.get("update_release","");String name=app.store.get("update_file","");boolean staged=!name.isEmpty()&&new File(Updates.dir(a),name).isFile();
   if(!release.isEmpty()){JSONObject r=Store.json(release);LinearLayout newer=u.card(body,u.soft);u.add(newer,u.text("新版本 "+r.optString("version_name"),19,u.ink,true),0);if(!r.optString("notes").isEmpty())u.add(newer,u.label(r.optString("notes")),8);if(!busy&&!staged)u.add(newer,u.button("下载更新",true,()->app.network.execute(()->Updates.download(app))),12);}
   if(busy)u.add(body,u.button("取消准备",false,()->Updates.cancel(app)),10);

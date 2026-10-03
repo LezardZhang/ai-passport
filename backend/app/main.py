@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import secrets
+import shutil
 import sqlite3
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
@@ -122,6 +123,46 @@ def init_db() -> None:
             """
         )
         migrate_audio_categories(db)
+
+
+def seed_builtin_audio() -> None:
+    """Install a small original family-safe catalog once, without touching user tracks."""
+    if os.getenv("CHILDCARE_SEED_BUILTIN_AUDIO", "0") != "1":
+        return
+    source_dir = ROOT / "assets" / "childcare_audio"
+    entries = (
+        ("xigua-original-lullaby", "西瓜原创 · 轻柔儿歌", "song", "watermelon_lullaby.wav"),
+        ("xigua-bedtime-story-music", "晚安小故事 · 月亮配乐", "story", "watermelon_story.wav"),
+        ("xigua-original-classical", "西瓜原创 · 古典旋律", "classical", "watermelon_classical.wav"),
+    )
+    now = utc_now()
+    with get_db() as db:
+        for track_id, title, category, filename in entries:
+            if db.execute("SELECT 1 FROM audio_tracks WHERE id=?", (track_id,)).fetchone():
+                continue
+            source = source_dir / filename
+            if not source.is_file():
+                continue
+            target_name = f"builtin-{filename}"
+            target = MEDIA_DIR / target_name
+            if not target.is_file():
+                shutil.copyfile(source, target)
+            data = target.read_bytes()
+            db.execute(
+                """INSERT INTO audio_tracks(id,title,category,file_name,play_url,mime_type,duration_ms,sha256,size_bytes,active,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,1,?,?)""",
+                (track_id, title, category, target_name, None, "audio/wav", len(data) * 1000 // 24000,
+                 hashlib.sha256(data).hexdigest(), len(data), now, now),
+            )
+            try:
+                db.execute(
+                    "INSERT OR IGNORE INTO audio_sources VALUES(?,?,?,?,?,?)",
+                    (track_id, "https://162.14.108.234/cloud-backup/childcare/audio/original",
+                     "西瓜原创", "原创家庭内容", "https://162.14.108.234/cloud-backup/childcare/audio/original", "首次内置"),
+                )
+            except sqlite3.OperationalError:
+                # The legacy-only app creates audio_sources in its personal extension.
+                pass
 
 
 def migrate_audio_categories(db: sqlite3.Connection) -> None:
@@ -315,6 +356,7 @@ def startup() -> None:
     init_db()
     from .personal import initialize
     initialize()
+    seed_builtin_audio()
 
 
 def authorize(

@@ -23,7 +23,20 @@ final class Ui {
     EditText input(String hint,String value,int type){EditText e=new EditText(c);e.setSingleLine(false);e.setTextColor(ink);e.setHintTextColor(muted);e.setTextSize(16);e.setPadding(dp(14),dp(14),dp(14),dp(14));e.setBackground(shape(soft,16));e.setInputType(type);e.setHint(hint);e.setText(value);e.setMinHeight(dp(56));return e;}
     void section(LinearLayout p,String title,String sub){add(p,text(title,18,ink,true),20);if(sub!=null&&!sub.isEmpty())add(p,label(sub),4);}
     View icon(String kind,int color,int size){return new Icon(c,kind,color,dp(size));}
-    View iconAction(String kind,String label,Runnable action){FrameLayout box=new FrameLayout(c);box.setMinimumWidth(dp(48));box.setMinimumHeight(dp(48));FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(24),dp(24),Gravity.CENTER);box.addView(icon(kind,green,24),p);box.setBackground(new RippleDrawable(android.content.res.ColorStateList.valueOf(soft),null,shape(Color.WHITE,12)));box.setClickable(true);box.setFocusable(true);box.setContentDescription(label);box.setOnClickListener(v->action.run());return box;}
+    private int assetFor(String kind){
+        if("settings".equals(kind))return R.drawable.ic_settings;
+        if("audio_library".equals(kind))return R.drawable.ic_audio_library;
+        if("lullaby".equals(kind))return R.drawable.ic_lullaby;
+        if("story".equals(kind))return R.drawable.ic_story;
+        if("classical".equals(kind))return R.drawable.ic_classical;
+        if("timer".equals(kind))return R.drawable.ic_timer;
+        if("import".equals(kind))return R.drawable.ic_import;
+        if("refresh".equals(kind))return R.drawable.ic_refresh;
+        if("sync".equals(kind))return R.drawable.ic_sync;
+        return 0;
+    }
+    View assetIcon(String kind,int size){int id=assetFor(kind);if(id==0)return icon(kind,green,size);ImageView image=new ImageView(c);image.setImageResource(id);image.setScaleType(ImageView.ScaleType.CENTER_INSIDE);image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);return image;}
+    View iconAction(String kind,String label,Runnable action){FrameLayout box=new FrameLayout(c);box.setMinimumWidth(dp(48));box.setMinimumHeight(dp(48));FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(30),dp(30),Gravity.CENTER);box.addView(assetIcon(kind,30),p);box.setBackground(new RippleDrawable(android.content.res.ColorStateList.valueOf(soft),null,shape(Color.WHITE,12)));box.setClickable(true);box.setFocusable(true);box.setContentDescription(label);box.setOnClickListener(v->action.run());return box;}
     LinearLayout item(LinearLayout parent,String title,String detail,String action,Runnable click){LinearLayout row=row();row.setPadding(dp(12),dp(4),dp(8),dp(4));row.setMinimumHeight(dp(56));row.setBackground(shape(surface,12));LinearLayout labels=column();labels.addView(text(title,16,ink,true));if(detail!=null&&!detail.isEmpty())add(labels,text(detail,12,muted,false),2);row.addView(labels,new LinearLayout.LayoutParams(0,-2,1));if(action!=null&&!action.isEmpty())row.addView(button(action,false,click));else row.addView(icon("chevron",muted,20));row.setClickable(true);row.setFocusable(true);row.setContentDescription(title+(detail==null?"":"，"+detail)+(action==null?"":"，"+action));row.setOnClickListener(v->click.run());add(parent,row,4);return row;}
     static final class Icon extends View {
         final String kind;final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);final int size;
