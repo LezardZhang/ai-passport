@@ -1,10 +1,10 @@
 {
   "package_name": "cn.xigua.childcare",
-  "version_code": 18,
-  "version_name": "0.7.1-cloud",
+  "version_code": 20,
+  "version_name": "0.7.3-cloud",
   "min_sdk": 26,
-  "size_bytes": 1222036,
-  "sha256": "859520afde9b155f6aad41b687b7766c1c3a2ba561ea950f6d22663dba596c9c",
+  "size_bytes": 1226132,
+  "sha256": "057202cd4915e693188140abc73a5c588f97673cde5df50d382db2b32758f63c",
   "certificate_sha256": "b9ba60dca0104e1968bdd6fa46e9459799bb2e4b69f2dd8d41c14a70321917a9",
-  "notes": "0.7.1-cloud：全应用统一图标；照护首页移除声音与故事区域；语音输入不再恢复或保留上一轮文字与录音缓存。\n"
+  "notes": "0.7.3-cloud：保留自动检查更新和“立即检查更新”手动入口，并修正更新页的当前版本状态显示。\n"
 }
